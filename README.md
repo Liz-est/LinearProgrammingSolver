@@ -178,10 +178,6 @@ Contributions are welcome! Please:
 - **Factorization**: Pluggable backends allow algorithm optimization per use case
 - **Memory**: Zero-erasure for sparse vectors prevents memory leaks
 
-## License
-
-[Add your license here, e.g., MIT, Apache 2.0]
-
 ## References
 
 - Dual Simplex Method: [Academic reference]
@@ -198,4 +194,4 @@ For issues, questions, or suggestions, please:
 
 ---
 
-**Status**: Phase 1 Development | **Last Updated**: March 2026
+**Status**: Phase 1 Development | **Last Updated**: March 27 2026
