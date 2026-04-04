@@ -1,0 +1,21 @@
+# Build directories
+build/
+cmake-build-debug/
+cmake-build-release/
+cmake-build-*/
+
+# IDE and editor files
+.vscode/
+.vs/
+.idea/
+*.swp
+*.swo
+*~
+.clangd
+
+# macOS
+.DS_Store
+
+# Temporary files
+*.tmp
+*.log
