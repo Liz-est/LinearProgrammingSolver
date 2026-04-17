@@ -5,6 +5,7 @@
 #include "linalg/umfpack_factor.hpp"
 #include "model/problem_data.hpp"
 #include "model/solver_state.hpp"
+#include "presolve/presolver.hpp"
 #include "simplex/dual_simplex.hpp"
 #include "simplex/i_row_pivot.hpp"
 #include "simplex/i_solver_observer.hpp"

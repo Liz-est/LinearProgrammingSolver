@@ -10,6 +10,9 @@ struct SolverState {
     std::vector<double> x_basic;
     std::vector<double> reduced_costs;
     std::vector<double> dual_pi;
+    std::vector<double> dse_weights;
+    std::vector<double> primal_solution;
+    std::vector<double> dual_solution;
 
     int iteration{0};
     double objective{0.0};

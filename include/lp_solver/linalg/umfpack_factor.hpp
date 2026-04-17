@@ -1,5 +1,7 @@
 #pragma once
 
+#include <vector>
+
 #include "i_basis_factor.hpp"
 
 namespace lp_solver {
@@ -14,8 +16,16 @@ public:
     [[nodiscard]] int etaFileLength() const override;
 
 private:
+    struct EtaUpdate {
+        int pivot_row{0};
+        std::vector<double> d;
+    };
+
     bool is_factorized_{false};
-    int eta_length_{0};
+    int dimension_{0};
+    std::vector<std::vector<double>> lu_;
+    std::vector<int> pivot_;
+    std::vector<EtaUpdate> eta_updates_;
 };
 
 }  // namespace linalg

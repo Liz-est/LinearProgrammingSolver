@@ -12,6 +12,7 @@ add_library(lp_solver
     ${CMAKE_CURRENT_SOURCE_DIR}/src/linalg/factor_factory.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/linalg/eigen_factor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/linalg/umfpack_factor.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/presolve/presolver.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/simplex/dual_simplex.cpp
 )
 
@@ -37,3 +38,11 @@ add_executable(lp_solver_stress_tests
 target_link_libraries(lp_solver_stress_tests PRIVATE lp_solver)
 
 add_test(NAME stress_test COMMAND lp_solver_stress_tests)
+
+add_executable(lp_solver_advanced_features_tests
+    tests/advanced_features_test.cpp
+)
+
+target_link_libraries(lp_solver_advanced_features_tests PRIVATE lp_solver)
+
+add_test(NAME advanced_features_test COMMAND lp_solver_advanced_features_tests)

@@ -1,197 +1,120 @@
-# Linear Programming Solver
+﻿# Linear Programming Solver
 
-**🌐 Language** | [中文版本](README_zh.md)
+**Language** | [中文版本](README_zh.md)
 
-A high-performance C++ library for solving linear programming problems using the dual simplex algorithm with sparse matrix representations and pluggable linear algebra backends.
+A C++20 library for **standard-form linear programs** (minimize \(c^\top x\) subject to \(Ax=b\), \(x \ge 0\)) using a **revised dual simplex** core with sparse CSC storage, optional presolve, and a pluggable basis factorization interface.
 
 ### Features
 
-- **Dual Simplex Algorithm**: Efficient implementation of the dual simplex method for LP optimization
-- **Sparse Matrix Representation**: CSC (Compressed Sparse Column) format for memory-efficient storage and computation
-- **Multiple LA Backends**: Support for both Eigen and UMFPACK factorization methods
-- **Indexed Vector Support**: Hypersparse vector operations for efficient pricing and tableau updates
-- **C++20 Implementation**: Modern C++ with strict type safety and Move semantics optimization
-- **Cross-Platform**: Built with CMake, supports Windows, Linux, and macOS
+- **Revised dual simplex**: `CHUZR → BTRAN → CHUZC → FTRAN → pivot` loop with primal/dual updates
+- **Phase I (Big-M, textbook-style)**: explicit bounding row on the current nonbasic set, artificial variable in the basis, one forcing pivot, then Phase II on the augmented problem (see `mat3007h_Project_Manual.tex` in the repo)
+- **Basis maintenance**: dense LU factorization of \(B\) plus **ETA-file** (product-form) updates; periodic **refactor** when the ETA chain grows
+- **Pricing**: optional **dual steepest-edge** row selection with **Goldfarb–Reid–style** weight updates; **Harris two-pass** dual ratio test for entering columns
+- **Presolve / postsolve**: lightweight algebraic reductions with a LIFO stack and primal recovery (`Presolver`)
+- **Sparse primitives**: `PackedMatrix` (CSC), `IndexedVector` (tracked nonzeros), `A x` and \(A^\top y\) helpers
+- **Factor backends**: `EigenFactor` and `UmfpackFactor` implement the same **built-in dense LU** today (no external Eigen or SuiteSparse link required to build); names are kept for future true backend swap-ins
+- **Cross-platform**: CMake, Windows / Linux / macOS
 
 ## Project Structure
 
 ```
 LinearProgramingSolver/
-├── include/lp_solver/          # Public headers
-│   ├── linalg/                 # Linear algebra abstraction
-│   │   ├── i_basis_factor.hpp  # Basis factorization interface
-│   │   ├── eigen_factor.hpp    # Eigen backend
-│   │   └── umfpack_factor.hpp  # UMFPACK backend
-│   ├── model/                  # Problem data structures
-│   ├── simplex/                # Dual simplex algorithm
-│   └── util/                   # Sparse data structures
-│       ├── indexed_vector.hpp  # Hypersparse vectors
-│       └── packed_matrix.hpp   # CSC matrix representation
-├── src/                        # Implementation files
-├── tests/                      # Test suites
-│   ├── smoke_test.cpp          # Basic functionality tests
-│   └── stress_test.cpp         # Performance and robustness tests
-└── CMakeLists.txt              # Build configuration
+├── include/lp_solver/
+│   ├── linalg/ # IBasisFactor, LU + ETA sweep
+│   ├── model/                  # ProblemData, SolverState
+│   ├── presolve/               # Presolver + postsolve stack
+│   ├── simplex/                # DualSimplex, hooks
+│   └── util/                   # PackedMatrix, IndexedVector
+├── src/
+├── tests/
+│   ├── smoke_test.cpp
+│   ├── stress_test.cpp
+│   └── advanced_features_test.cpp
+├── mat3007h_Project_Manual.tex # Course implementation manual (reference)
+└── CMakeLists.txt
 ```
 
 ## Requirements
 
-- **C++20** compiler (MSVC, GCC, or Clang)
+- **C++20** (MSVC, GCC, or Clang)
 - **CMake 3.20+**
-- **Windows 10/11**, Linux, or macOS
-- Optional: Eigen3 or UMFPACK libraries for advanced factorization
 
-## Installation & Build
+## Build
 
-### Clone the Repository
-
-```bash
-git clone https://github.com/Liz-est/LinearProgramingSolver.git
-cd LinearProgramingSolver
-```
-
-### Build with CMake
-
-#### Debug Configuration
 ```bash
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
 cmake --build build --config Debug
 ```
 
-#### Release Configuration
+Release:
+
 ```bash
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build --config Release
 ```
 
-### Run Tests
+## Tests
 
 ```bash
 ctest --test-dir build -C Debug --output-on-failure
 ```
 
-Or use the automated test runner (Windows):
+Windows helper:
+
 ```powershell
 .\run-test-plan.ps1 -Config Debug -BuildDir build
 ```
 
 ## Usage
 
-### Basic Example
-
 ```cpp
 #include "lp_solver/lp_solver.hpp"
 
-// Create problem data
-ProblemData problem = /* ... */;
+lp_solver::model::ProblemData problem{
+    /* PackedMatrix A */,
+    /* c */,
+    /* b */,
+    /* lower_bounds (per variable, often all0) */,
+    /* upper_bounds (per variable) */
+};
 
-// Initialize solver
-DualSimplex solver(problem);
+lp_solver::model::SolverState state;
+state.basic_indices = /* size m, valid basis column indices */;
 
-// Solve
-SolverState result = solver.solve();
+auto factor = lp_solver::linalg::makeFactor(lp_solver::linalg::FactorBackend::Eigen);
+lp_solver::simplex::DualSimplex solver(std::move(factor), nullptr, nullptr);
 
-// Access solution
-if (result.status == OptimalityStatus::OPTIMAL) {
-    auto solution = result.primal_solution;
-    auto objective = result.objective_value;
+lp_solver::simplex::SolverConfig cfg;
+// cfg.use_presolve, cfg.enable_big_m_phase_one, cfg.use_dual_steepest_edge,
+// cfg.use_harris_two_pass, cfg.refactor_frequency, etc.
+
+const auto status = solver.solve(problem, state, cfg);
+if (status == lp_solver::simplex::DualSimplex::Status::Optimal) {
+    // state.primal_solution, state.dual_solution, state.objective
 }
 ```
 
 ## API Overview
 
-### Core Components
+| Component | Role |
+|-----------|------|
+| `DualSimplex` | Main solver; `SolverConfig` toggles presolve, Big-M, DSE, Harris, refactor cadence |
+| `IBasisFactor` | `factorize`, `ftran`, `btran`, `updateEta`, `etaFileLength` |
+| `Presolver` | Reduce problem; `postsolvePrimal` maps a core solution back |
+| `ProblemData` | \(A\), \(b\), \(c\), bounds |
+| `SolverState` | Basis / nonbasis, \(x_B\), \(\pi\), reduced costs, DSE weights, solutions |
 
-- **`DualSimplex`**: Main solver class implementing the dual simplex algorithm
-- **`IBasisFactor`**: Abstract interface for basis factorization
-- **`PackedMatrix`**: Immutable CSC format sparse matrix
-- **`IndexedVector`**: Sparse vector with active index tracking
-- **`ProblemData`**: Standard form LP problem definition
-- **`SolverState`**: Solution and solver statistics
+## Implementation Notes
 
-### Architecture
-
-The solver uses a modular architecture with pluggable backends:
-
-```
-DualSimplex (Algorithm)
-    ↓
-IBasisFactor (Abstract Interface)
-    ├─ EigenFactor (Eigen3 backend)
-    └─ UmfpackFactor (UMFPACK backend)
-```
-
-## Test Coverage
-
-The project includes comprehensive test suites:
-
-- **Smoke Tests** (`smoke_test.cpp`): Validates basic solver functionality and correctness
-- **Stress Tests** (`stress_test.cpp`): Performance testing with large-scale problems
-
-Run tests with:
-```bash
-ctest --test-dir build --output-on-failure -V
-```
-
-## Implementation Status
-
-### Phase 1 (Active Development)
-
-✅ Completed:
-- Sparse primitives (IndexedVector, PackedMatrix)
-- Factorization abstraction layer
-- Dual simplex algorithm skeleton
-
-🔄 In Progress:
-- LA backend integration (Eigen, UMFPACK)
-- Matrix-vector operations
-- Pricing and update operations
-
-## Development
-
-### Build Configuration
-
-- **C++ Standard**: C++20
-- **Compiler Flags**: Strict error checking enabled
-- **Build System**: CMake with native toolchain support
-
-### Code Organization
-
-- Headers in `include/lp_solver/`
-- Implementations in `src/`
-- Tests in `tests/`
-- Build artifacts in `build/`
-
-## Contributing
-
-Contributions are welcome! Please:
-
-1. Fork the repository
-2. Create a feature branch
-3. Add tests for new functionality
-4. Ensure all tests pass
-5. Submit a pull request
-
-## Performance Considerations
-
-- **Sparse Operations**: Leverages CSC format and indexed vectors for efficiency
-- **Factorization**: Pluggable backends allow algorithm optimization per use case
-- **Memory**: Zero-erasure for sparse vectors prevents memory leaks
+- The manual’s **hypersparse triangular solves** and **third-party sparse LU** are described in `mat3007h_Project_Manual.tex`; the current code uses **dense** basis solves for correctness and a smaller dependency surface.
+- After Big-M Phase I, the working problem has **one extra row and artificial column** until the end of the solve; reported `primal_solution` strips the artificial column when present.
 
 ## References
 
-- Dual Simplex Method: [Academic reference]
-- Sparse Matrix Formats: [Technical documentation]
-- Eigen3: https://eigen.tuxfamily.org/
-- UMFPACK: https://people.engr.tamu.edu/davis/suitesparse.html
-
-## Support
-
-For issues, questions, or suggestions, please:
-- Open an issue on GitHub
-- Submit a pull request with improvements
-- Contact: [your contact information]
+- Course manual: `mat3007h_Project_Manual.tex`
+- Eigen (optional future backend): https://eigen.tuxfamily.org/
+- SuiteSparse / UMFPACK (optional future backend): https://people.engr.tamu.edu/davis/suitesparse.html
 
 ---
 
-**Status**: Phase 1 Development | **Last Updated**: March 27 2026
+**Last updated**: April 2026

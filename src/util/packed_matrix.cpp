@@ -61,6 +61,54 @@ IndexedVector PackedMatrix::column(int j) const {
     return out;
 }
 
+std::vector<double> PackedMatrix::multiply(const std::vector<double>& x) const {
+    if (static_cast<int>(x.size()) != num_cols_) {
+        throw std::invalid_argument("multiply input size must equal numCols");
+    }
+    std::vector<double> y(num_rows_, 0.0);
+    for (int col = 0; col < num_cols_; ++col) {
+        const double xj = x[col];
+        if (xj == 0.0) {
+            continue;
+        }
+        const int begin = col_starts_[col];
+        const int end = col_starts_[col + 1];
+        for (int k = begin; k < end; ++k) {
+            y[row_indices_[k]] += elements_[k] * xj;
+        }
+    }
+    return y;
+}
+
+std::vector<double> PackedMatrix::transposeMultiply(const std::vector<double>& y) const {
+    if (static_cast<int>(y.size()) != num_rows_) {
+        throw std::invalid_argument("transposeMultiply input size must equal numRows");
+    }
+    std::vector<double> x(num_cols_, 0.0);
+    for (int col = 0; col < num_cols_; ++col) {
+        double sum = 0.0;
+        const int begin = col_starts_[col];
+        const int end = col_starts_[col + 1];
+        for (int k = begin; k < end; ++k) {
+            sum += elements_[k] * y[row_indices_[k]];
+        }
+        x[col] = sum;
+    }
+    return x;
+}
+
+std::vector<std::vector<double>> PackedMatrix::toDense() const {
+    std::vector<std::vector<double>> dense(num_rows_, std::vector<double>(num_cols_, 0.0));
+    for (int col = 0; col < num_cols_; ++col) {
+        const int begin = col_starts_[col];
+        const int end = col_starts_[col + 1];
+        for (int k = begin; k < end; ++k) {
+            dense[row_indices_[k]][col] = elements_[k];
+        }
+    }
+    return dense;
+}
+
 const std::vector<int>& PackedMatrix::rowIndices() const { return row_indices_; }
 const std::vector<int>& PackedMatrix::colStarts() const { return col_starts_; }
 const std::vector<double>& PackedMatrix::elements() const { return elements_; }

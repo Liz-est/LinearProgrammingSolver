@@ -24,6 +24,9 @@ public:
     };
 
     [[nodiscard]] IndexedVector column(int j) const;
+    [[nodiscard]] std::vector<double> multiply(const std::vector<double>& x) const;
+    [[nodiscard]] std::vector<double> transposeMultiply(const std::vector<double>& y) const;
+    [[nodiscard]] std::vector<std::vector<double>> toDense() const;
     [[nodiscard]] const std::vector<int>& rowIndices() const;
     [[nodiscard]] const std::vector<int>& colStarts() const;
     [[nodiscard]] const std::vector<double>& elements() const;
