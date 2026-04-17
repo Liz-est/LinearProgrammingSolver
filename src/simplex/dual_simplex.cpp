@@ -539,11 +539,21 @@ void DualSimplex::computeDualAndReducedCosts(const model::ProblemData& prob, mod
     }
     btran(cb);
 
+    if (state.dual_pi.size() < static_cast<size_t>(prob.numRows())) {
+        throw std::runtime_error("computeDualAndReducedCosts: dual_pi size mismatch");
+    }
+
     for (int i = 0; i < prob.numRows(); ++i) {
         state.dual_pi[i] = cb[i];
     }
     for (size_t k = 0; k < state.nonbasic_indices.size(); ++k) {
         const int col = state.nonbasic_indices[k];
+        if (col < 0 || col >= prob.numCols()) {
+            throw std::runtime_error("computeDualAndReducedCosts: nonbasic col out of range");
+        }
+        if (k >= state.reduced_costs.size()) {
+            throw std::runtime_error("computeDualAndReducedCosts: reduced_costs size mismatch");
+        }
         state.reduced_costs[k] = prob.c[col] - dotColumn(prob.A, col, state.dual_pi);
     }
 }

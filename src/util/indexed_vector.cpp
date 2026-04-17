@@ -45,6 +45,7 @@ void IndexedVector::set(int index, double value) {
 void IndexedVector::clear() {
     for (int idx : indices_) {
         elements_[idx] = 0.0;
+        pos_in_indices_[idx] = -1;
     }
     indices_.clear();
     nnz_ = 0;

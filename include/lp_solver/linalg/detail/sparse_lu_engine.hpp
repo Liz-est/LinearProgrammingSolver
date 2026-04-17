@@ -52,6 +52,11 @@ private:
     std::vector<int> perm_r_;
     std::vector<int> perm_c_;
 
+    // Dense LU fallback for correctness-critical solves.
+    std::vector<double> dense_lu_;
+    std::vector<int> dense_piv_;
+    bool use_dense_lu_{false};
+
     std::vector<int> Lt_p_;
     std::vector<int> Lt_i_;
     std::vector<double> Lt_x_;

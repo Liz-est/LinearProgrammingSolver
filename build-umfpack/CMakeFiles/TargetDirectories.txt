@@ -1,0 +1,7 @@
+E:/LinearProgramingSolver/build-umfpack/CMakeFiles/lp_solver.dir
+E:/LinearProgramingSolver/build-umfpack/CMakeFiles/lp_solver_smoke_tests.dir
+E:/LinearProgramingSolver/build-umfpack/CMakeFiles/lp_solver_stress_tests.dir
+E:/LinearProgramingSolver/build-umfpack/CMakeFiles/lp_solver_advanced_features_tests.dir
+E:/LinearProgramingSolver/build-umfpack/CMakeFiles/RUN_TESTS.dir
+E:/LinearProgramingSolver/build-umfpack/CMakeFiles/ALL_BUILD.dir
+E:/LinearProgramingSolver/build-umfpack/CMakeFiles/ZERO_CHECK.dir

@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <fstream>
 #include <stdexcept>
+#include <string>
 
 using namespace Eigen;
 
@@ -58,6 +59,113 @@ void packedToEigen(const util::PackedMatrix& A, SpMat& out) {
     out.setFromTriplets(t.begin(), t.end());
 }
 
+void packedToDense(const util::PackedMatrix& A, std::vector<double>& out) {
+    const int n = A.numRows();
+    out.assign(static_cast<size_t>(n * n), 0.0);
+    const auto& cs = A.colStarts();
+    const auto& ri = A.rowIndices();
+    const auto& el = A.elements();
+    for (int j = 0; j < n; ++j) {
+        for (int p = cs[static_cast<size_t>(j)]; p < cs[static_cast<size_t>(j + 1)]; ++p) {
+            const int i = ri[static_cast<size_t>(p)];
+            out[static_cast<size_t>(i * n + j)] += el[static_cast<size_t>(p)];
+        }
+    }
+}
+
+bool denseLuFactor(std::vector<double>& lu, int n, std::vector<int>& piv) {
+    piv.resize(static_cast<size_t>(n));
+    for (int i = 0; i < n; ++i) {
+        piv[static_cast<size_t>(i)] = i;
+    }
+    for (int k = 0; k < n; ++k) {
+        int pivot_row = k;
+        double best = std::abs(lu[static_cast<size_t>(k * n + k)]);
+        for (int i = k + 1; i < n; ++i) {
+            const double v = std::abs(lu[static_cast<size_t>(i * n + k)]);
+            if (v > best) {
+                best = v;
+                pivot_row = i;
+            }
+        }
+        if (best <= 1e-15) {
+            return false;
+        }
+        if (pivot_row != k) {
+            for (int j = 0; j < n; ++j) {
+                std::swap(lu[static_cast<size_t>(k * n + j)], lu[static_cast<size_t>(pivot_row * n + j)]);
+            }
+            std::swap(piv[static_cast<size_t>(k)], piv[static_cast<size_t>(pivot_row)]);
+        }
+        const double diag = lu[static_cast<size_t>(k * n + k)];
+        for (int i = k + 1; i < n; ++i) {
+            const size_t ik = static_cast<size_t>(i * n + k);
+            lu[ik] /= diag;
+            const double lik = lu[ik];
+            for (int j = k + 1; j < n; ++j) {
+                lu[static_cast<size_t>(i * n + j)] -= lik * lu[static_cast<size_t>(k * n + j)];
+            }
+        }
+    }
+    return true;
+}
+
+void denseLuSolve(const std::vector<double>& lu, const std::vector<int>& piv, int n, util::IndexedVector& rhs) {
+    std::vector<double> b(static_cast<size_t>(n), 0.0);
+    const auto& raw = rhs.rawValues();
+    for (int i = 0; i < n; ++i) {
+        const int src = piv[static_cast<size_t>(i)];
+        b[static_cast<size_t>(i)] = raw[static_cast<size_t>(src)];
+    }
+    for (int i = 0; i < n; ++i) {
+        for (int j = 0; j < i; ++j) {
+            b[static_cast<size_t>(i)] -= lu[static_cast<size_t>(i * n + j)] * b[static_cast<size_t>(j)];
+        }
+    }
+    for (int i = n - 1; i >= 0; --i) {
+        for (int j = i + 1; j < n; ++j) {
+            b[static_cast<size_t>(i)] -= lu[static_cast<size_t>(i * n + j)] * b[static_cast<size_t>(j)];
+        }
+        b[static_cast<size_t>(i)] /= lu[static_cast<size_t>(i * n + i)];
+    }
+    rhs.clear();
+    for (int i = 0; i < n; ++i) {
+        if (std::abs(b[static_cast<size_t>(i)]) > 1e-14) {
+            rhs.set(i, b[static_cast<size_t>(i)]);
+        }
+    }
+}
+
+void denseLuSolveTranspose(const std::vector<double>& lu, const std::vector<int>& piv, int n, util::IndexedVector& rhs) {
+    std::vector<double> y(static_cast<size_t>(n), 0.0);
+    const auto& raw = rhs.rawValues();
+    for (int i = 0; i < n; ++i) {
+        y[static_cast<size_t>(i)] = raw[static_cast<size_t>(i)];
+    }
+    for (int i = 0; i < n; ++i) {
+        for (int j = 0; j < i; ++j) {
+            y[static_cast<size_t>(i)] -= lu[static_cast<size_t>(j * n + i)] * y[static_cast<size_t>(j)];
+        }
+        y[static_cast<size_t>(i)] /= lu[static_cast<size_t>(i * n + i)];
+    }
+    for (int i = n - 1; i >= 0; --i) {
+        for (int j = i + 1; j < n; ++j) {
+            y[static_cast<size_t>(i)] -= lu[static_cast<size_t>(j * n + i)] * y[static_cast<size_t>(j)];
+        }
+    }
+    std::vector<double> x(static_cast<size_t>(n), 0.0);
+    for (int i = 0; i < n; ++i) {
+        const int dst = piv[static_cast<size_t>(i)];
+        x[static_cast<size_t>(dst)] = y[static_cast<size_t>(i)];
+    }
+    rhs.clear();
+    for (int i = 0; i < n; ++i) {
+        if (std::abs(x[static_cast<size_t>(i)]) > 1e-14) {
+            rhs.set(i, x[static_cast<size_t>(i)]);
+        }
+    }
+}
+
 void eigenPermToVector(const PermutationMatrix<Dynamic, Dynamic>& perm, std::vector<int>& out) {
     const int n = static_cast<int>(perm.size());
     out.resize(n);
@@ -70,7 +178,10 @@ void buildInversePerm(const std::vector<int>& perm, std::vector<int>& inv) {
     const int n = static_cast<int>(perm.size());
     inv.assign(static_cast<size_t>(n), 0);
     for (int i = 0; i < n; ++i) {
-        inv[static_cast<size_t>(perm[static_cast<size_t>(i)])] = i;
+        const int p = perm[static_cast<size_t>(i)];
+        if (p >= 0 && p < n) {
+            inv[static_cast<size_t>(p)] = i;
+        }
     }
 }
 
@@ -164,6 +275,12 @@ void transposeToCsc(
         }
     }
 }
+
+void validatePermOrThrow(const std::vector<int>& perm, int n, const char* name) {
+    if (static_cast<int>(perm.size()) != n) {
+        throw std::logic_error(std::string(name) + ": permutation size mismatch");
+    }
+}
 }  // namespace
 
 bool SparseLuEngine::factorize(const util::PackedMatrix& basis_matrix) {
@@ -176,6 +293,7 @@ bool SparseLuEngine::factorize(const util::PackedMatrix& basis_matrix) {
         basis_matrix.numNonZeros()
     );
     factor_ok_ = false;
+    use_dense_lu_ = false;
     if (basis_matrix.numRows() != basis_matrix.numCols()) {
         return false;
     }
@@ -183,6 +301,16 @@ bool SparseLuEngine::factorize(const util::PackedMatrix& basis_matrix) {
     if (n_ <= 0) {
         return false;
     }
+
+    packedToDense(basis_matrix, dense_lu_);
+    if (!denseLuFactor(dense_lu_, n_, dense_piv_)) {
+        dense_lu_.clear();
+        dense_piv_.clear();
+        return false;
+    }
+    use_dense_lu_ = true;
+    factor_ok_ = true;
+    return true;
 
     SpMat A;
     packedToEigen(basis_matrix, A);
@@ -279,6 +407,9 @@ void SparseLuEngine::adoptFactorData(
     std::vector<int> perm_c
 ) {
     factor_ok_ = false;
+    use_dense_lu_ = false;
+    dense_lu_.clear();
+    dense_piv_.clear();
     n_ = 0;
     if (dim <= 0) {
         return;
@@ -321,6 +452,7 @@ void SparseLuEngine::adoptFactorData(
 }
 
 void SparseLuEngine::applyRowPermForward(const std::vector<int>& perm, util::IndexedVector& x) const {
+    validatePermOrThrow(perm, n_, "applyRowPermForward");
     const auto& raw = x.rawValues();
     util::IndexedVector tmp(n_);
     for (int i = 0; i < n_; ++i) {
@@ -342,12 +474,11 @@ void SparseLuEngine::applyRowPermInverseTranspose(const std::vector<int>& perm, 
 }
 
 void SparseLuEngine::applyColPermForward(const std::vector<int>& perm, util::IndexedVector& x) const {
-    std::vector<int> inv;
-    buildInversePerm(perm, inv);
+    validatePermOrThrow(perm, n_, "applyColPermForward");
     const auto& raw = x.rawValues();
     util::IndexedVector tmp(n_);
     for (int i = 0; i < n_; ++i) {
-        const int src = inv[static_cast<size_t>(i)];
+        const int src = perm[static_cast<size_t>(i)];
         if (src >= 0 && src < n_ && std::abs(raw[static_cast<size_t>(src)]) > 1e-19) {
             tmp.set(i, raw[static_cast<size_t>(src)]);
         }
@@ -366,6 +497,13 @@ void SparseLuEngine::ftran(util::IndexedVector& rhs) const {
     if (!factor_ok_) {
         throw std::logic_error("SparseLuEngine::ftran: not factorized");
     }
+    if (rhs.capacity() < n_) {
+        throw std::logic_error("SparseLuEngine::ftran: rhs capacity mismatch");
+    }
+    if (use_dense_lu_) {
+        denseLuSolve(dense_lu_, dense_piv_, n_, rhs);
+        return;
+    }
     applyRowPermForward(perm_r_, rhs);
 
     CscMatrixView L{ n_, Lp_.data(), Li_.data(), Lx_.data() };
@@ -380,6 +518,13 @@ void SparseLuEngine::ftran(util::IndexedVector& rhs) const {
 void SparseLuEngine::btran(util::IndexedVector& rhs) const {
     if (!factor_ok_) {
         throw std::logic_error("SparseLuEngine::btran: not factorized");
+    }
+    if (rhs.capacity() < n_) {
+        throw std::logic_error("SparseLuEngine::btran: rhs capacity mismatch");
+    }
+    if (use_dense_lu_) {
+        denseLuSolveTranspose(dense_lu_, dense_piv_, n_, rhs);
+        return;
     }
     applyColPermInverseTranspose(perm_c_, rhs);
 

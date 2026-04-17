@@ -57,6 +57,9 @@ void gpLowerUnitSolve(
     if (n <= 0) {
         return;
     }
+    if (x.capacity() < n) {
+        throw std::logic_error("gpLowerUnitSolve: rhs capacity mismatch");
+    }
     std::vector<std::uint8_t> marked(static_cast<size_t>(n), 0);
     for (int k = 0; k < n; ++k) {
         if (std::abs(x[k]) > kZeroTol) {
@@ -89,18 +92,18 @@ void gpUpperSolve(
     if (n <= 0) {
         return;
     }
+    if (x.capacity() < n) {
+        throw std::logic_error("gpUpperSolve: rhs capacity mismatch");
+    }
     for (int j = n - 1; j >= 0; --j) {
         double diag = 0.0;
-        double sum = x[j];
         for (int p = U.col_ptr[j]; p < U.col_ptr[j + 1]; ++p) {
-            const int i = U.row_ind[p];
-            const double v = U.values[p];
-            if (i < j) {
-                sum -= v * x[i];
-            } else if (i == j) {
-                diag = v;
+            if (U.row_ind[p] == j) {
+                diag = U.values[p];
+                break;
             }
         }
+        double xj = x[j];
         if (std::abs(diag) <= kZeroTol) {
             if (implicit_unit_diagonal) {
                 diag = 1.0;
@@ -108,7 +111,15 @@ void gpUpperSolve(
                 throw std::runtime_error("gpUpperSolve: missing or singular diagonal");
             }
         }
-        x.set(j, sum / diag);
+        xj /= diag;
+        x.set(j, xj);
+        for (int p = U.col_ptr[j]; p < U.col_ptr[j + 1]; ++p) {
+            const int i = U.row_ind[p];
+            const double v = U.values[p];
+            if (i < j) {
+                x.add(i, -v * xj);
+            }
+        }
     }
 }
 
@@ -124,29 +135,28 @@ void gpLowerDiagSolve(
     if (n <= 0) {
         return;
     }
-    std::vector<std::uint8_t> marked(static_cast<size_t>(n), 0);
-    for (int k = 0; k < n; ++k) {
-        if (std::abs(x[k]) > kZeroTol) {
-            dfsMarkLowerDiagReach(k, L, marked);
-        }
+    if (x.capacity() < n) {
+        throw std::logic_error("gpLowerDiagSolve: rhs capacity mismatch");
     }
     for (int j = 0; j < n; ++j) {
-        if (!marked[static_cast<size_t>(j)]) {
-            continue;
-        }
         double diag = 0.0;
-        double sum = x[j];
+        for (int p = L.col_ptr[j]; p < L.col_ptr[j + 1]; ++p) {
+            if (L.row_ind[p] == j) {
+                diag = L.values[p];
+                break;
+            }
+        }
+        if (std::abs(diag) <= kZeroTol) {
+            throw std::runtime_error("gpLowerDiagSolve: missing or singular diagonal");
+        }
+        const double xj = x[j] / diag;
+        x.set(j, xj);
         for (int p = L.col_ptr[j]; p < L.col_ptr[j + 1]; ++p) {
             const int i = L.row_ind[p];
             const double v = L.values[p];
-            if (i < j) {
-                sum -= v * x[i];
-            } else if (i == j) {
-                diag = v;
+            if (i > j) {
+                x.add(i, -v * xj);
             }
-        }
-        if (std::abs(diag) > kZeroTol) {
-            x.set(j, sum / diag);
         }
     }
 }
