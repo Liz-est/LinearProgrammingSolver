@@ -8,11 +8,12 @@ A C++20 library for **standard-form linear programs** (minimize \(c^\top x\) sub
 
 - **Revised dual simplex**: `CHUZR → BTRAN → CHUZC → FTRAN → pivot` loop with primal/dual updates
 - **Phase I (Big-M, textbook-style)**: explicit bounding row on the current nonbasic set, artificial variable in the basis, one forcing pivot, then Phase II on the augmented problem (see `mat3007h_Project_Manual.tex` in the repo)
-- **Basis maintenance**: dense LU factorization of \(B\) plus **ETA-file** (product-form) updates; periodic **refactor** when the ETA chain grows
+- **Basis maintenance**: sparse LU factorization of \(B\) plus **ETA-file** (product-form) updates; periodic **refactor** when the ETA chain grows
 - **Pricing**: optional **dual steepest-edge** row selection with **Goldfarb–Reid–style** weight updates; **Harris two-pass** dual ratio test for entering columns
 - **Presolve / postsolve**: lightweight algebraic reductions with a LIFO stack and primal recovery (`Presolver`)
 - **Sparse primitives**: `PackedMatrix` (CSC), `IndexedVector` (tracked nonzeros), `A x` and \(A^\top y\) helpers
-- **Factor backends**: `EigenFactor` and `UmfpackFactor` implement the same **built-in dense LU** today (no external Eigen or SuiteSparse link required to build); names are kept for future true backend swap-ins
+- **Hypersparse triangular solves**: Gilbert-Peierls-style sparse forward/backward substitutions on extracted CSC L/U factors
+- **Factor backends**: `EigenFactor` uses Eigen SparseLU; `UmfpackFactor` uses SuiteSparse UMFPACK when found, otherwise falls back to the same sparse engine
 - **Cross-platform**: CMake, Windows / Linux / macOS
 
 ## Project Structure
@@ -106,7 +107,8 @@ if (status == lp_solver::simplex::DualSimplex::Status::Optimal) {
 
 ## Implementation Notes
 
-- The manual’s **hypersparse triangular solves** and **third-party sparse LU** are described in `mat3007h_Project_Manual.tex`; the current code uses **dense** basis solves for correctness and a smaller dependency surface.
+- The manual’s **hypersparse triangular solves** and **third-party sparse LU** are now implemented: basis factorization uses sparse LU factors and sparse triangular substitutions.
+- `EigenFactor` is implemented with Eigen SparseLU extraction + GP-style solves; `UmfpackFactor` uses UMFPACK extraction when available and otherwise falls back to the same sparse path.
 - After Big-M Phase I, the working problem has **one extra row and artificial column** until the end of the solve; reported `primal_solution` strips the artificial column when present.
 
 ## References

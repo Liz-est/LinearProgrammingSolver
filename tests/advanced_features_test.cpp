@@ -1,4 +1,5 @@
 #include "../include/lp_solver/linalg/i_basis_factor.hpp"
+#include "../include/lp_solver/linalg/eigen_factor.hpp"
 #include "../include/lp_solver/linalg/umfpack_factor.hpp"
 #include "../include/lp_solver/model/problem_data.hpp"
 #include "../include/lp_solver/model/solver_state.hpp"
@@ -9,6 +10,7 @@
 
 #include <stdexcept>
 #include <iostream>
+#include <cmath>
 #include <utility>
 #include <vector>
 
@@ -95,6 +97,40 @@ void testPresolveAndPostsolve() {
     expect(static_cast<int>(restored.size()) == prob.numCols(), "postsolve size mismatch");
 }
 
+void testSparseFactorBackendsAgreeOnSolve() {
+    lp_solver::util::PackedMatrix::Builder b(4, 4);
+    b.appendColumn(std::vector<int>{0, 1}, std::vector<double>{4.0, 1.0});
+    b.appendColumn(std::vector<int>{0, 1, 2}, std::vector<double>{1.0, 3.0, 1.0});
+    b.appendColumn(std::vector<int>{1, 2, 3}, std::vector<double>{1.0, 2.5, 0.5});
+    b.appendColumn(std::vector<int>{2, 3}, std::vector<double>{1.0, 2.0});
+    const auto A = std::move(b).build();
+
+    lp_solver::linalg::EigenFactor eigen_factor;
+    lp_solver::linalg::UmfpackFactor umf_factor;
+    expect(eigen_factor.factorize(A), "EigenFactor factorize should succeed");
+    expect(umf_factor.factorize(A), "UmfpackFactor factorize should succeed");
+
+    lp_solver::util::IndexedVector rhs_f_eig(4);
+    rhs_f_eig.set(0, 2.0);
+    rhs_f_eig.set(3, -1.0);
+    auto rhs_f_umf = rhs_f_eig;
+    eigen_factor.ftran(rhs_f_eig);
+    umf_factor.ftran(rhs_f_umf);
+    for (int i = 0; i < 4; ++i) {
+        expect(std::abs(rhs_f_eig[i] - rhs_f_umf[i]) < 1e-8, "ftran mismatch between EigenFactor and UmfpackFactor");
+    }
+
+    lp_solver::util::IndexedVector rhs_b_eig(4);
+    rhs_b_eig.set(1, 1.5);
+    rhs_b_eig.set(2, -0.25);
+    auto rhs_b_umf = rhs_b_eig;
+    eigen_factor.btran(rhs_b_eig);
+    umf_factor.btran(rhs_b_umf);
+    for (int i = 0; i < 4; ++i) {
+        expect(std::abs(rhs_b_eig[i] - rhs_b_umf[i]) < 1e-8, "btran mismatch between EigenFactor and UmfpackFactor");
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -102,6 +138,7 @@ int main() {
         testEtaLengthAndRefactorReset();
         testBigMEntryPathRuns();
         testPresolveAndPostsolve();
+        testSparseFactorBackendsAgreeOnSolve();
     } catch (const std::exception& ex) {
         std::cerr << ex.what() << '\n';
         return 1;

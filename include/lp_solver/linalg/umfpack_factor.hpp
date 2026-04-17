@@ -2,17 +2,20 @@
 
 #include <vector>
 
+#include "detail/sparse_lu_engine.hpp"
 #include "i_basis_factor.hpp"
 
 namespace lp_solver {
 namespace linalg {
 
+/// Basis factorization: **SuiteSparse UMFPACK** when available (extracted L/U + Gilbert–Peierls
+/// triangular solves), otherwise **Eigen::SparseLU** (same pipeline as `EigenFactor`).
 class UmfpackFactor final : public IBasisFactor {
 public:
-    [[nodiscard]] bool factorize(const util::PackedMatrix& basis_matrix) override;
-    void ftran(util::IndexedVector& rhs) const override;
-    void btran(util::IndexedVector& rhs) const override;
-    void updateEta(int pivot_row, const util::IndexedVector& ftran_col) override;
+    [[nodiscard]] bool factorize(const ::lp_solver::util::PackedMatrix& basis_matrix) override;
+    void ftran(::lp_solver::util::IndexedVector& rhs) const override;
+    void btran(::lp_solver::util::IndexedVector& rhs) const override;
+    void updateEta(int pivot_row, const ::lp_solver::util::IndexedVector& ftran_col) override;
     [[nodiscard]] int etaFileLength() const override;
 
 private:
@@ -21,10 +24,10 @@ private:
         std::vector<double> d;
     };
 
-    bool is_factorized_{false};
-    int dimension_{0};
-    std::vector<std::vector<double>> lu_;
-    std::vector<int> pivot_;
+    static void applyEtaForward(std::vector<double>& v, const std::vector<EtaUpdate>& etas);
+    static void applyEtaBackward(std::vector<double>& v, const std::vector<EtaUpdate>& etas);
+
+    detail::SparseLuEngine engine_;
     std::vector<EtaUpdate> eta_updates_;
 };
 

@@ -8,11 +8,12 @@
 
 - **修正对偶单纯形**：`CHUZR → BTRAN → CHUZC → FTRAN → 转轴` 及对偶、原始更新
 - **Phase I Big-M（教科书流程）**：对**当前非基变量**增加显式界约束行与人工变量入基，做一次**强制转轴**（最负 reduced cost 进基、人工离基），再进入 Phase II；与仓库内 `mat3007h_Project_Manual.tex` 一致
-- **基维护**：对 \(B\) 做 **稠密 LU** 分解，迭代间用 **ETA 链**（乘积形式逆）修正；达到 `refactor_frequency` 时 **重构** LU
+- **基维护**：对 \(B\) 做 **稀疏 LU** 分解，迭代间用 **ETA 链**（乘积形式逆）修正；达到 `refactor_frequency` 时 **重构** LU
 - **定价**：可选 **对偶最陡边（DSE）** 选离基行及 **Goldfarb–Reid 型** 权重递推；进基采用 **Harris 两阶段**比率检验
 - **预处理/后处理**：代数化简 + **LIFO 栈** 记录，`postsolvePrimal` 恢复原始维度上的原始解
 - **稀疏基础结构**：`PackedMatrix`（CSC）、`IndexedVector`；`multiply` / `transposeMultiply`
-- **因子后端**：`EigenFactor` 与 `UmfpackFactor` 目前均为 **内置稠密 LU**（**无需**链接外部 Eigen 或 SuiteSparse 即可编译）；命名保留便于日后替换为真稀疏后端
+- **超稀疏三角解**：基于 Gilbert-Peierls 风格的 CSC 稀疏前/回代
+- **因子后端**：`EigenFactor` 使用 Eigen SparseLU；`UmfpackFactor` 在检测到 SuiteSparse UMFPACK 时使用 UMFPACK，否则回退到同一套稀疏引擎
 
 ## 项目结构
 
@@ -86,7 +87,8 @@ if (status == lp_solver::simplex::DualSimplex::Status::Optimal) {
 
 ## 实现说明
 
-- 手册中的 **超稀疏三角解** 与 **第三方稀疏 LU** 见 `mat3007h_Project_Manual.tex`；当前实现为 **稠密基求解**，以降低依赖、优先保证流程正确。
+- 手册中的 **超稀疏三角解** 与 **第三方稀疏 LU** 已实现：基求解采用稀疏 LU 因子 + 稀疏三角前/回代。
+- `EigenFactor` 走 Eigen SparseLU 提取 + GP 风格解法；`UmfpackFactor` 在可用时走 UMFPACK 提取，不可用时回退同一稀疏路径。
 - Big-M 扩维后工作问题多一行一列；返回的 **`primal_solution` 会去掉人工列**（若存在）。
 
 ## 参考

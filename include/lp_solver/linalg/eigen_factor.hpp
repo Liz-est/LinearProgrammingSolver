@@ -2,10 +2,13 @@
 
 #include <vector>
 
+#include "detail/sparse_lu_engine.hpp"
 #include "i_basis_factor.hpp"
 
 namespace lp_solver::linalg {
 
+/// Basis factorization using **Eigen::SparseLU** on the sparse basis matrix and
+/// **Gilbert–Peierls-style** triangular solves on the extracted L/U factors.
 class EigenFactor final : public IBasisFactor {
 public:
     [[nodiscard]] bool factorize(const ::lp_solver::util::PackedMatrix& basis_matrix) override;
@@ -20,10 +23,10 @@ private:
         std::vector<double> d;
     };
 
-    bool is_factorized_{false};
-    int dimension_{0};
-    std::vector<std::vector<double>> lu_;
-    std::vector<int> pivot_;
+    static void applyEtaForward(std::vector<double>& v, const std::vector<EtaUpdate>& etas);
+    static void applyEtaBackward(std::vector<double>& v, const std::vector<EtaUpdate>& etas);
+
+    detail::SparseLuEngine engine_;
     std::vector<EtaUpdate> eta_updates_;
 };
 

@@ -5,17 +5,23 @@
 #include <stdexcept>
 #include <vector>
 
+#ifdef LP_SOLVER_HAVE_UMFPACK
+extern "C" {
+#include <umfpack.h>
+}
+#endif
+
 namespace lp_solver::linalg {
 
 namespace {
 constexpr double kSingularTol = 1e-12;
 
 std::vector<double> indexedToDense(const util::IndexedVector& rhs, int n) {
-    std::vector<double> dense(n, 0.0);
+    std::vector<double> dense(static_cast<size_t>(n), 0.0);
     const auto& raw = rhs.rawValues();
     const int copy_n = std::min(static_cast<int>(raw.size()), n);
     for (int i = 0; i < copy_n; ++i) {
-        dense[i] = raw[i];
+        dense[static_cast<size_t>(i)] = raw[static_cast<size_t>(i)];
     }
     return dense;
 }
@@ -23,162 +29,234 @@ std::vector<double> indexedToDense(const util::IndexedVector& rhs, int n) {
 void denseToIndexed(const std::vector<double>& dense, util::IndexedVector& out) {
     out.clear();
     for (int i = 0; i < static_cast<int>(dense.size()); ++i) {
-        if (std::abs(dense[i]) > 1e-14) {
-            out.set(i, dense[i]);
+        if (std::abs(dense[static_cast<size_t>(i)]) > 1e-14) {
+            out.set(i, dense[static_cast<size_t>(i)]);
         }
     }
 }
 
-bool luFactorize(std::vector<std::vector<double>>& lu, std::vector<int>& pivot) {
-    const int n = static_cast<int>(lu.size());
-    pivot.resize(n);
-    for (int i = 0; i < n; ++i) {
-        pivot[i] = i;
-    }
-
-    for (int k = 0; k < n; ++k) {
-        int pivot_row = k;
-        double best = std::abs(lu[k][k]);
-        for (int i = k + 1; i < n; ++i) {
-            const double cand = std::abs(lu[i][k]);
-            if (cand > best) {
-                best = cand;
-                pivot_row = i;
-            }
-        }
-        if (best <= kSingularTol) {
-            return false;
-        }
-        if (pivot_row != k) {
-            std::swap(lu[pivot_row], lu[k]);
-            std::swap(pivot[pivot_row], pivot[k]);
-        }
-        for (int i = k + 1; i < n; ++i) {
-            lu[i][k] /= lu[k][k];
-            for (int j = k + 1; j < n; ++j) {
-                lu[i][j] -= lu[i][k] * lu[k][j];
-            }
-        }
-    }
-    return true;
-}
-
-std::vector<double> luSolve(const std::vector<std::vector<double>>& lu, const std::vector<int>& pivot, const std::vector<double>& rhs) {
-    const int n = static_cast<int>(lu.size());
-    std::vector<double> x(n, 0.0);
-    for (int i = 0; i < n; ++i) {
-        x[i] = rhs[pivot[i]];
-    }
-    for (int i = 0; i < n; ++i) {
-        for (int j = 0; j < i; ++j) {
-            x[i] -= lu[i][j] * x[j];
-        }
-    }
-    for (int i = n - 1; i >= 0; --i) {
-        for (int j = i + 1; j < n; ++j) {
-            x[i] -= lu[i][j] * x[j];
-        }
-        x[i] /= lu[i][i];
-    }
-    return x;
-}
-
-std::vector<double> luSolveTranspose(
-    const std::vector<std::vector<double>>& lu,
-    const std::vector<int>& pivot,
-    const std::vector<double>& rhs
+/// Convert square CSR (row-major sparse) to CSC. Indices may be unsorted per column; GP solves
+/// tolerate the lower-triangular structure here.
+void csrToCsc(
+    int n,
+    const std::vector<int>& Rp,
+    const std::vector<int>& Rj,
+    const std::vector<double>& Rx,
+    std::vector<int>& Cp,
+    std::vector<int>& Ci,
+    std::vector<double>& Cx
 ) {
-    const int n = static_cast<int>(lu.size());
-    std::vector<double> y(rhs);
+    std::vector<int> count(static_cast<size_t>(n), 0);
+    const int nnz = Rp[static_cast<size_t>(n)];
+    for (int p = 0; p < nnz; ++p) {
+        ++count[static_cast<size_t>(Rj[static_cast<size_t>(p)])];
+    }
+    Cp.assign(static_cast<size_t>(n + 1), 0);
+    for (int j = 1; j <= n; ++j) {
+        Cp[static_cast<size_t>(j)] = Cp[static_cast<size_t>(j - 1)] + count[static_cast<size_t>(j - 1)];
+    }
+    std::vector<int> next = Cp;
+    Ci.resize(static_cast<size_t>(nnz));
+    Cx.resize(static_cast<size_t>(nnz));
     for (int i = 0; i < n; ++i) {
-        for (int j = 0; j < i; ++j) {
-            y[i] -= lu[j][i] * y[j];
-        }
-        y[i] /= lu[i][i];
-    }
-    for (int i = n - 1; i >= 0; --i) {
-        for (int j = i + 1; j < n; ++j) {
-            y[i] -= lu[j][i] * y[j];
+        for (int p = Rp[static_cast<size_t>(i)]; p < Rp[static_cast<size_t>(i + 1)]; ++p) {
+            const int j = Rj[static_cast<size_t>(p)];
+            const int q = next[static_cast<size_t>(j)]++;
+            Ci[static_cast<size_t>(q)] = i;
+            Cx[static_cast<size_t>(q)] = Rx[static_cast<size_t>(p)];
         }
     }
-
-    std::vector<double> x(n, 0.0);
-    for (int i = 0; i < n; ++i) {
-        x[pivot[i]] = y[i];
+    for (int j = 0; j < n; ++j) {
+        const int p0 = Cp[static_cast<size_t>(j)];
+        const int p1 = Cp[static_cast<size_t>(j + 1)];
+        for (int a = p0 + 1; a < p1; ++a) {
+            const int row = Ci[static_cast<size_t>(a)];
+            const double val = Cx[static_cast<size_t>(a)];
+            int b = a;
+            while (b > p0 && Ci[static_cast<size_t>(b - 1)] > row) {
+                Ci[static_cast<size_t>(b)] = Ci[static_cast<size_t>(b - 1)];
+                Cx[static_cast<size_t>(b)] = Cx[static_cast<size_t>(b - 1)];
+                --b;
+            }
+            Ci[static_cast<size_t>(b)] = row;
+            Cx[static_cast<size_t>(b)] = val;
+        }
     }
-    return x;
 }
-}  // namespace
 
-bool UmfpackFactor::factorize(const util::PackedMatrix& basis_matrix) {
-    if (basis_matrix.numRows() != basis_matrix.numCols()) {
-        is_factorized_ = false;
+#ifdef LP_SOLVER_HAVE_UMFPACK
+[[nodiscard]] bool factorizeWithUmfpack(detail::SparseLuEngine& engine, const util::PackedMatrix& A) {
+    engine = detail::SparseLuEngine{};
+    if (A.numRows() != A.numCols()) {
         return false;
     }
-    dimension_ = basis_matrix.numRows();
-    lu_ = basis_matrix.toDense();
-    eta_updates_.clear();
-    is_factorized_ = luFactorize(lu_, pivot_);
-    return is_factorized_;
-}
-
-void UmfpackFactor::ftran(util::IndexedVector& rhs) const {
-    if (!is_factorized_) {
-        throw std::logic_error("ftran called before successful factorization");
+    const int n = A.numRows();
+    if (n <= 0) {
+        return false;
     }
-    std::vector<double> v = indexedToDense(rhs, dimension_);
-    v = luSolve(lu_, pivot_, v);
-    for (const auto& eta : eta_updates_) {
+
+    const auto& cs = A.colStarts();
+    const auto& ri = A.rowIndices();
+    const auto& el = A.elements();
+    if (static_cast<int>(cs.size()) != n + 1) {
+        return false;
+    }
+    std::vector<int> Ap(cs.begin(), cs.end());
+    std::vector<int> Ai(ri.begin(), ri.end());
+    std::vector<double> Ax(el.begin(), el.end());
+
+    double Control[UMFPACK_CONTROL];
+    double Info[UMFPACK_INFO];
+    umfpack_di_defaults(Control);
+    Control[UMFPACK_SCALE] = UMFPACK_SCALE_NONE;
+
+    void* Symbolic = nullptr;
+    int status = umfpack_di_symbolic(n, n, Ap.data(), Ai.data(), Ax.data(), &Symbolic, Control, Info);
+    if (status != UMFPACK_OK) {
+        umfpack_di_free_symbolic(&Symbolic);
+        return false;
+    }
+
+    void* Numeric = nullptr;
+    status = umfpack_di_numeric(Ap.data(), Ai.data(), Ax.data(), Symbolic, &Numeric, Control, Info);
+    umfpack_di_free_symbolic(&Symbolic);
+    if (status != UMFPACK_OK) {
+        umfpack_di_free_numeric(&Numeric);
+        return false;
+    }
+
+    int lnz = 0;
+    int unz = 0;
+    int nnz_lu = 0;
+    int n_row = 0;
+    int n_col = 0;
+    status = umfpack_di_get_lunz(&lnz, &unz, &nnz_lu, &n_row, &n_col, Numeric);
+    if (status != UMFPACK_OK || n_row != n || n_col != n) {
+        umfpack_di_free_numeric(&Numeric);
+        return false;
+    }
+
+    std::vector<int> Lp_csr(static_cast<size_t>(n + 1));
+    std::vector<int> Lj_csr(static_cast<size_t>(lnz));
+    std::vector<double> Lx_csr(static_cast<size_t>(lnz));
+    std::vector<int> Up_csc(static_cast<size_t>(n + 1));
+    std::vector<int> Ui_csc(static_cast<size_t>(unz));
+    std::vector<double> Ux_csc(static_cast<size_t>(unz));
+    std::vector<int> Pperm(static_cast<size_t>(n));
+    std::vector<int> Qperm(static_cast<size_t>(n));
+    std::vector<double> Dx(static_cast<size_t>(n));
+    std::vector<double> Rs(static_cast<size_t>(n));
+    int do_recip = 0;
+
+    status = umfpack_di_get_numeric(
+        Lp_csr.data(),
+        Lj_csr.data(),
+        Lx_csr.data(),
+        Up_csc.data(),
+        Ui_csc.data(),
+        Ux_csc.data(),
+        Pperm.data(),
+        Qperm.data(),
+        Dx.data(),
+        &do_recip,
+        Rs.data(),
+        Numeric
+    );
+    umfpack_di_free_numeric(&Numeric);
+    if (status != UMFPACK_OK) {
+        return false;
+    }
+
+    std::vector<int> Lp_csc;
+    std::vector<int> Li_csc;
+    std::vector<double> Lx_csc;
+    csrToCsc(n, Lp_csr, Lj_csr, Lx_csr, Lp_csc, Li_csc, Lx_csc);
+
+    engine.adoptFactorData(n, std::move(Lp_csc), std::move(Li_csc), std::move(Lx_csc), std::move(Up_csc), std::move(Ui_csc), std::move(Ux_csc), std::move(Pperm), std::move(Qperm));
+    return engine.ok();
+}
+#endif
+}  // namespace
+
+void UmfpackFactor::applyEtaForward(std::vector<double>& v, const std::vector<EtaUpdate>& etas) {
+    for (const auto& eta : etas) {
         const int p = eta.pivot_row;
-        const double dp = eta.d[p];
+        const double dp = eta.d[static_cast<size_t>(p)];
         if (std::abs(dp) <= kSingularTol) {
             continue;
         }
-        const double xp = v[p] / dp;
-        for (int i = 0; i < dimension_; ++i) {
+        const double xp = v[static_cast<size_t>(p)] / dp;
+        for (int i = 0; i < static_cast<int>(v.size()); ++i) {
             if (i == p) {
                 continue;
             }
-            v[i] -= eta.d[i] * xp;
+            v[static_cast<size_t>(i)] -= eta.d[static_cast<size_t>(i)] * xp;
         }
-        v[p] = xp;
+        v[static_cast<size_t>(p)] = xp;
     }
-    denseToIndexed(v, rhs);
 }
 
-void UmfpackFactor::btran(util::IndexedVector& rhs) const {
-    if (!is_factorized_) {
-        throw std::logic_error("btran called before successful factorization");
-    }
-    std::vector<double> v = indexedToDense(rhs, dimension_);
-    for (auto it = eta_updates_.rbegin(); it != eta_updates_.rend(); ++it) {
+void UmfpackFactor::applyEtaBackward(std::vector<double>& v, const std::vector<EtaUpdate>& etas) {
+    for (auto it = etas.rbegin(); it != etas.rend(); ++it) {
         const int p = it->pivot_row;
-        const double dp = it->d[p];
+        const double dp = it->d[static_cast<size_t>(p)];
         if (std::abs(dp) <= kSingularTol) {
             continue;
         }
         double sum = 0.0;
-        for (int i = 0; i < dimension_; ++i) {
+        for (int i = 0; i < static_cast<int>(v.size()); ++i) {
             if (i == p) {
                 continue;
             }
-            sum += it->d[i] * v[i];
+            sum += it->d[static_cast<size_t>(i)] * v[static_cast<size_t>(i)];
         }
-        v[p] = (v[p] - sum) / dp;
+        v[static_cast<size_t>(p)] = (v[static_cast<size_t>(p)] - sum) / dp;
     }
-    v = luSolveTranspose(lu_, pivot_, v);
-    denseToIndexed(v, rhs);
+}
+
+bool UmfpackFactor::factorize(const util::PackedMatrix& basis_matrix) {
+    eta_updates_.clear();
+#ifdef LP_SOLVER_HAVE_UMFPACK
+    return factorizeWithUmfpack(engine_, basis_matrix);
+#else
+    return engine_.factorize(basis_matrix);
+#endif
+}
+
+void UmfpackFactor::ftran(util::IndexedVector& rhs) const {
+    if (!engine_.ok()) {
+        throw std::logic_error("UmfpackFactor::ftran called before successful factorization");
+    }
+    engine_.ftran(rhs);
+    if (!eta_updates_.empty()) {
+        auto v = indexedToDense(rhs, engine_.dimension());
+        applyEtaForward(v, eta_updates_);
+        denseToIndexed(v, rhs);
+    }
+}
+
+void UmfpackFactor::btran(util::IndexedVector& rhs) const {
+    if (!engine_.ok()) {
+        throw std::logic_error("UmfpackFactor::btran called before successful factorization");
+    }
+    if (!eta_updates_.empty()) {
+        auto v = indexedToDense(rhs, engine_.dimension());
+        applyEtaBackward(v, eta_updates_);
+        denseToIndexed(v, rhs);
+    }
+    engine_.btran(rhs);
 }
 
 void UmfpackFactor::updateEta(int pivot_row, const util::IndexedVector& ftran_col) {
-    if (pivot_row < 0 || pivot_row >= dimension_) {
+    const int n = engine_.dimension();
+    if (pivot_row < 0 || pivot_row >= n) {
         return;
     }
     EtaUpdate eta;
     eta.pivot_row = pivot_row;
-    eta.d = indexedToDense(ftran_col, dimension_);
-    if (eta.d[pivot_row] == 0.0) {
-        eta.d[pivot_row] = 1.0;
+    eta.d = indexedToDense(ftran_col, n);
+    if (eta.d[static_cast<size_t>(pivot_row)] == 0.0) {
+        eta.d[static_cast<size_t>(pivot_row)] = 1.0;
     }
     eta_updates_.push_back(std::move(eta));
 }
