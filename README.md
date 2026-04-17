@@ -40,6 +40,12 @@ LinearProgramingSolver/
 - **C++20** (MSVC, GCC, or Clang)
 - **CMake 3.20+**
 
+## Third-party Dependencies
+
+- This project can use **Eigen** and optionally **SuiteSparse / UMFPACK**.
+- If you download source archives locally (for example `eigen-5.0.0/`), keep them outside the repo root when possible.
+- If they must stay under the project root for local experiments, add those folders to `.gitignore` to avoid accidental commits.
+
 ## Build
 
 ```bash

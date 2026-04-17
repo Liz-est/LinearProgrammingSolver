@@ -39,6 +39,12 @@ LinearProgramingSolver/
 - **C++20**（MSVC、GCC 或 Clang）
 - **CMake 3.20+**
 
+## 第三方依赖说明
+
+- 项目可使用 **Eigen**，并可选启用 **SuiteSparse / UMFPACK**。
+- 若你是本地手动下载源码压缩包并解压（例如 `eigen-5.0.0/`），建议尽量放在仓库目录之外。
+- 若需要临时放在仓库根目录，请加入 `.gitignore`，避免误提交第三方源码目录。
+
 ## 构建
 
 ```bash

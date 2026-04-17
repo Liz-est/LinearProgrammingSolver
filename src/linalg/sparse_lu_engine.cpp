@@ -1,20 +1,45 @@
 #include "../../include/lp_solver/linalg/detail/sparse_lu_engine.hpp"
 #include "../../include/lp_solver/linalg/detail/sparse_triangular.hpp"
-
-#include <Eigen/Sparse>
-#include <Eigen/SparseLU>
+#include "../../eigen-5.0.0/Eigen/Sparse"
+#include "../../eigen-5.0.0/Eigen/SparseLU"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
+#include <fstream>
 #include <stdexcept>
-#include <type_traits>
+
+using namespace Eigen;
 
 namespace lp_solver::linalg::detail {
 
 namespace {
-using SpMat = Eigen::SparseMatrix<double, Eigen::ColMajor>;
-using MappedSupernodal = Eigen::internal::MappedSuperNodalMatrix<SpMat::Scalar, SpMat::StorageIndex>;
+using SpMat = SparseMatrix<double, ColMajor>;
+using MappedSupernodal = internal::MappedSuperNodalMatrix<SpMat::Scalar, SpMat::StorageIndex>;
+
+void writeDebugLog(
+    const char* run_id,
+    const char* hypothesis_id,
+    const char* location,
+    const char* message,
+    int n_value,
+    int nnz_value
+) {
+    const auto ts = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::system_clock::now().time_since_epoch()
+    )
+                        .count();
+    std::ofstream ofs("debug-9a8c78.log", std::ios::app);
+    if (!ofs) {
+        return;
+    }
+    // #region agent log
+    ofs << "{\"sessionId\":\"9a8c78\",\"runId\":\"" << run_id << "\",\"hypothesisId\":\"" << hypothesis_id
+        << "\",\"location\":\"" << location << "\",\"message\":\"" << message << "\",\"data\":{\"n\":"
+        << n_value << ",\"nnz\":" << nnz_value << "},\"timestamp\":" << ts << "}\n";
+    // #endregion
+}
 
 void packedToEigen(const util::PackedMatrix& A, SpMat& out) {
     const int m = A.numRows();
@@ -22,7 +47,7 @@ void packedToEigen(const util::PackedMatrix& A, SpMat& out) {
     const auto& cs = A.colStarts();
     const auto& ri = A.rowIndices();
     const auto& el = A.elements();
-    std::vector<Eigen::Triplet<double>> t;
+    std::vector<Triplet<double>> t;
     t.reserve(static_cast<size_t>(A.numNonZeros()));
     for (int j = 0; j < n; ++j) {
         for (int p = cs[j]; p < cs[j + 1]; ++p) {
@@ -33,7 +58,7 @@ void packedToEigen(const util::PackedMatrix& A, SpMat& out) {
     out.setFromTriplets(t.begin(), t.end());
 }
 
-void eigenPermToVector(const Eigen::PermutationMatrix<Eigen::Dynamic, Eigen::Dynamic>& perm, std::vector<int>& out) {
+void eigenPermToVector(const PermutationMatrix<Dynamic, Dynamic>& perm, std::vector<int>& out) {
     const int n = static_cast<int>(perm.size());
     out.resize(n);
     for (int i = 0; i < n; ++i) {
@@ -142,6 +167,14 @@ void transposeToCsc(
 }  // namespace
 
 bool SparseLuEngine::factorize(const util::PackedMatrix& basis_matrix) {
+    writeDebugLog(
+        "initial",
+        "H4",
+        "src/linalg/sparse_lu_engine.cpp:factorize",
+        "factorize entered",
+        basis_matrix.numRows(),
+        basis_matrix.numNonZeros()
+    );
     factor_ok_ = false;
     if (basis_matrix.numRows() != basis_matrix.numCols()) {
         return false;
@@ -154,9 +187,9 @@ bool SparseLuEngine::factorize(const util::PackedMatrix& basis_matrix) {
     SpMat A;
     packedToEigen(basis_matrix, A);
 
-    Eigen::SparseLU<SpMat> lu;
+    SparseLU<SpMat> lu;
     lu.compute(A);
-    if (lu.info() != Eigen::Success) {
+    if (lu.info() != Success) {
         return false;
     }
 
@@ -170,11 +203,11 @@ bool SparseLuEngine::factorize(const util::PackedMatrix& basis_matrix) {
     Lp_.assign(static_cast<size_t>(n_ + 1), 0);
     Li_.clear();
     Lx_.clear();
-    Li_.reserve(static_cast<size_t>(std::max<Eigen::Index>(0, lu.nnzL())));
-    Lx_.reserve(static_cast<size_t>(std::max<Eigen::Index>(0, lu.nnzL())));
+    Li_.reserve(static_cast<size_t>(std::max<Index>(0, lu.nnzL())));
+    Lx_.reserve(static_cast<size_t>(std::max<Index>(0, lu.nnzL())));
     for (int j = 0; j < n_; ++j) {
         std::vector<std::pair<int, double>> col;
-        for (typename MappedSupernodal::InnerIterator it(Lstore, static_cast<Eigen::Index>(j)); it; ++it) {
+        for (typename MappedSupernodal::InnerIterator it(Lstore, static_cast<Index>(j)); it; ++it) {
             const int row = static_cast<int>(it.row());
             const double val = it.value();
             if (row == j) {
@@ -196,8 +229,8 @@ bool SparseLuEngine::factorize(const util::PackedMatrix& basis_matrix) {
     Up_.assign(static_cast<size_t>(n_ + 1), 0);
     Ui_.clear();
     Ux_.clear();
-    Ui_.reserve(static_cast<size_t>(std::max<Eigen::Index>(0, lu.nnzU()) + n_));
-    Ux_.reserve(static_cast<size_t>(std::max<Eigen::Index>(0, lu.nnzU()) + n_));
+    Ui_.reserve(static_cast<size_t>(std::max<Index>(0, lu.nnzU()) + n_));
+    Ux_.reserve(static_cast<size_t>(std::max<Index>(0, lu.nnzU()) + n_));
     for (int j = 0; j < n_; ++j) {
         std::vector<std::pair<int, double>> col;
         bool have_u_diag = false;
