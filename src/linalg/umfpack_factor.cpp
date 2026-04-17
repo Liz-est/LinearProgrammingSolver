@@ -6,9 +6,7 @@
 #include <vector>
 
 #ifdef LP_SOLVER_HAVE_UMFPACK
-extern "C" {
 #include <umfpack.h>
-}
 #endif
 
 namespace lp_solver::linalg {
@@ -84,99 +82,95 @@ void csrToCsc(
     }
 }
 
+}  // namespace
+
+UmfpackFactor::~UmfpackFactor() {
 #ifdef LP_SOLVER_HAVE_UMFPACK
-[[nodiscard]] bool factorizeWithUmfpack(detail::SparseLuEngine& engine, const util::PackedMatrix& A) {
-    engine = detail::SparseLuEngine{};
-    if (A.numRows() != A.numCols()) {
+    clearUmfpackState();
+#endif
+}
+
+#ifdef LP_SOLVER_HAVE_UMFPACK
+void UmfpackFactor::clearUmfpackState() {
+    if (umf_numeric_ != nullptr) {
+        umfpack_di_free_numeric(&umf_numeric_);
+    }
+    use_umfpack_direct_ = false;
+    Ap_.clear();
+    Ai_.clear();
+    Ax_.clear();
+}
+
+bool UmfpackFactor::factorizeWithUmfpackDirect(const util::PackedMatrix& basis_matrix) {
+    if (basis_matrix.numRows() != basis_matrix.numCols()) {
         return false;
     }
-    const int n = A.numRows();
+    const int n = basis_matrix.numRows();
     if (n <= 0) {
         return false;
     }
 
-    const auto& cs = A.colStarts();
-    const auto& ri = A.rowIndices();
-    const auto& el = A.elements();
+    const auto& cs = basis_matrix.colStarts();
+    const auto& ri = basis_matrix.rowIndices();
+    const auto& el = basis_matrix.elements();
     if (static_cast<int>(cs.size()) != n + 1) {
         return false;
     }
-    std::vector<int> Ap(cs.begin(), cs.end());
-    std::vector<int> Ai(ri.begin(), ri.end());
-    std::vector<double> Ax(el.begin(), el.end());
+
+    Ap_.assign(cs.begin(), cs.end());
+    Ai_.assign(ri.begin(), ri.end());
+    Ax_.assign(el.begin(), el.end());
 
     double Control[UMFPACK_CONTROL];
     double Info[UMFPACK_INFO];
     umfpack_di_defaults(Control);
+    // Keep row scaling disabled so behavior matches EigenFactor and backend-consistency tests.
     Control[UMFPACK_SCALE] = UMFPACK_SCALE_NONE;
 
     void* Symbolic = nullptr;
-    int status = umfpack_di_symbolic(n, n, Ap.data(), Ai.data(), Ax.data(), &Symbolic, Control, Info);
+    int status = umfpack_di_symbolic(n, n, Ap_.data(), Ai_.data(), Ax_.data(), &Symbolic, Control, Info);
     if (status != UMFPACK_OK) {
         umfpack_di_free_symbolic(&Symbolic);
         return false;
     }
 
-    void* Numeric = nullptr;
-    status = umfpack_di_numeric(Ap.data(), Ai.data(), Ax.data(), Symbolic, &Numeric, Control, Info);
+    status = umfpack_di_numeric(Ap_.data(), Ai_.data(), Ax_.data(), Symbolic, &umf_numeric_, Control, Info);
     umfpack_di_free_symbolic(&Symbolic);
     if (status != UMFPACK_OK) {
-        umfpack_di_free_numeric(&Numeric);
+        clearUmfpackState();
         return false;
     }
 
-    int lnz = 0;
-    int unz = 0;
-    int nnz_lu = 0;
-    int n_row = 0;
-    int n_col = 0;
-    status = umfpack_di_get_lunz(&lnz, &unz, &nnz_lu, &n_row, &n_col, Numeric);
-    if (status != UMFPACK_OK || n_row != n || n_col != n) {
-        umfpack_di_free_numeric(&Numeric);
-        return false;
+    use_umfpack_direct_ = true;
+    return true;
+}
+
+void UmfpackFactor::umfpackSolve(int sys, util::IndexedVector& rhs) const {
+    if (!use_umfpack_direct_ || umf_numeric_ == nullptr) {
+        throw std::logic_error("UmfpackFactor::umfpackSolve called without UMFPACK numeric factorization");
     }
-
-    std::vector<int> Lp_csr(static_cast<size_t>(n + 1));
-    std::vector<int> Lj_csr(static_cast<size_t>(lnz));
-    std::vector<double> Lx_csr(static_cast<size_t>(lnz));
-    std::vector<int> Up_csc(static_cast<size_t>(n + 1));
-    std::vector<int> Ui_csc(static_cast<size_t>(unz));
-    std::vector<double> Ux_csc(static_cast<size_t>(unz));
-    std::vector<int> Pperm(static_cast<size_t>(n));
-    std::vector<int> Qperm(static_cast<size_t>(n));
-    std::vector<double> Dx(static_cast<size_t>(n));
-    std::vector<double> Rs(static_cast<size_t>(n));
-    int do_recip = 0;
-
-    status = umfpack_di_get_numeric(
-        Lp_csr.data(),
-        Lj_csr.data(),
-        Lx_csr.data(),
-        Up_csc.data(),
-        Ui_csc.data(),
-        Ux_csc.data(),
-        Pperm.data(),
-        Qperm.data(),
-        Dx.data(),
-        &do_recip,
-        Rs.data(),
-        Numeric
+    if (rhs.capacity() < dimension_) {
+        throw std::logic_error("UmfpackFactor::umfpackSolve rhs capacity mismatch");
+    }
+    std::vector<double> b = indexedToDense(rhs, dimension_);
+    std::vector<double> x(static_cast<size_t>(dimension_), 0.0);
+    const int status = umfpack_di_solve(
+        sys,
+        Ap_.data(),
+        Ai_.data(),
+        Ax_.data(),
+        x.data(),
+        b.data(),
+        umf_numeric_,
+        nullptr,
+        nullptr
     );
-    umfpack_di_free_numeric(&Numeric);
     if (status != UMFPACK_OK) {
-        return false;
+        throw std::runtime_error("umfpack_di_solve failed");
     }
-
-    std::vector<int> Lp_csc;
-    std::vector<int> Li_csc;
-    std::vector<double> Lx_csc;
-    csrToCsc(n, Lp_csr, Lj_csr, Lx_csr, Lp_csc, Li_csc, Lx_csc);
-
-    engine.adoptFactorData(n, std::move(Lp_csc), std::move(Li_csc), std::move(Lx_csc), std::move(Up_csc), std::move(Ui_csc), std::move(Ux_csc), std::move(Pperm), std::move(Qperm));
-    return engine.ok();
+    denseToIndexed(x, rhs);
 }
 #endif
-}  // namespace
 
 void UmfpackFactor::applyEtaForward(std::vector<double>& v, const std::vector<EtaUpdate>& etas) {
     for (const auto& eta : etas) {
@@ -216,39 +210,62 @@ void UmfpackFactor::applyEtaBackward(std::vector<double>& v, const std::vector<E
 
 bool UmfpackFactor::factorize(const util::PackedMatrix& basis_matrix) {
     eta_updates_.clear();
+    dimension_ = basis_matrix.numRows();
 #ifdef LP_SOLVER_HAVE_UMFPACK
-    return factorizeWithUmfpack(engine_, basis_matrix);
+    clearUmfpackState();
+    if (factorizeWithUmfpackDirect(basis_matrix)) {
+        return true;
+    }
+    return engine_.factorize(basis_matrix);
 #else
     return engine_.factorize(basis_matrix);
 #endif
 }
 
 void UmfpackFactor::ftran(util::IndexedVector& rhs) const {
-    if (!engine_.ok()) {
-        throw std::logic_error("UmfpackFactor::ftran called before successful factorization");
+    bool solved = false;
+#ifdef LP_SOLVER_HAVE_UMFPACK
+    if (use_umfpack_direct_) {
+        umfpackSolve(UMFPACK_A, rhs);
+        solved = true;
     }
-    engine_.ftran(rhs);
+#endif
+    if (!solved) {
+        if (!engine_.ok()) {
+            throw std::logic_error("UmfpackFactor::ftran called before successful factorization");
+        }
+        engine_.ftran(rhs);
+    }
     if (!eta_updates_.empty()) {
-        auto v = indexedToDense(rhs, engine_.dimension());
+        auto v = indexedToDense(rhs, dimension_);
         applyEtaForward(v, eta_updates_);
         denseToIndexed(v, rhs);
     }
 }
 
 void UmfpackFactor::btran(util::IndexedVector& rhs) const {
-    if (!engine_.ok()) {
-        throw std::logic_error("UmfpackFactor::btran called before successful factorization");
-    }
     if (!eta_updates_.empty()) {
-        auto v = indexedToDense(rhs, engine_.dimension());
+        auto v = indexedToDense(rhs, dimension_);
         applyEtaBackward(v, eta_updates_);
         denseToIndexed(v, rhs);
     }
-    engine_.btran(rhs);
+    bool solved = false;
+#ifdef LP_SOLVER_HAVE_UMFPACK
+    if (use_umfpack_direct_) {
+        umfpackSolve(UMFPACK_At, rhs);
+        solved = true;
+    }
+#endif
+    if (!solved) {
+        if (!engine_.ok()) {
+            throw std::logic_error("UmfpackFactor::btran called before successful factorization");
+        }
+        engine_.btran(rhs);
+    }
 }
 
 void UmfpackFactor::updateEta(int pivot_row, const util::IndexedVector& ftran_col) {
-    const int n = engine_.dimension();
+    const int n = dimension_;
     if (pivot_row < 0 || pivot_row >= n) {
         return;
     }

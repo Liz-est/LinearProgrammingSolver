@@ -1,8 +1,11 @@
 # Build directories
 build/
+build-mingw-umfpack/
+build-umfpack/
 cmake-build-debug/
 cmake-build-release/
 cmake-build-*/
+.cache/
 
 # IDE and editor files
 .vscode/

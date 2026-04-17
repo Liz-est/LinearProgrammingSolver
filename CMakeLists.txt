@@ -74,7 +74,7 @@ target_compile_definitions(lp_solver PUBLIC LP_SOLVER_USE_EIGEN_SPARSE_LU=1)
 
 if(LP_SOLVER_HAVE_UMFPACK)
     target_include_directories(lp_solver PRIVATE ${UMFPACK_INCLUDE_DIR})
-    target_compile_definitions(lp_solver PRIVATE LP_SOLVER_HAVE_UMFPACK=1)
+    target_compile_definitions(lp_solver PUBLIC LP_SOLVER_HAVE_UMFPACK=1)
     target_link_libraries(lp_solver PRIVATE ${UMFPACK_LIBRARY} ${AMD_LIBRARY})
     if(SUITESPARSE_CONFIG_LIBRARY)
         target_link_libraries(lp_solver PRIVATE ${SUITESPARSE_CONFIG_LIBRARY})
@@ -106,3 +106,15 @@ add_executable(lp_solver_advanced_features_tests
 target_link_libraries(lp_solver_advanced_features_tests PRIVATE lp_solver)
 
 add_test(NAME advanced_features_test COMMAND lp_solver_advanced_features_tests)
+
+set(_LP_SOLVER_TEST_ENV
+    "OPENBLAS_NUM_THREADS=1"
+    "GOTO_NUM_THREADS=1"
+    "OMP_NUM_THREADS=1"
+)
+set_tests_properties(
+    smoke_test
+    stress_test
+    advanced_features_test
+    PROPERTIES ENVIRONMENT "${_LP_SOLVER_TEST_ENV}"
+)

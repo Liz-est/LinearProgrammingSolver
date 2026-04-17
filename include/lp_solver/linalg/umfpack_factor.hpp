@@ -12,6 +12,7 @@ namespace linalg {
 /// triangular solves), otherwise **Eigen::SparseLU** (same pipeline as `EigenFactor`).
 class UmfpackFactor final : public IBasisFactor {
 public:
+    ~UmfpackFactor() override;
     [[nodiscard]] bool factorize(const ::lp_solver::util::PackedMatrix& basis_matrix) override;
     void ftran(::lp_solver::util::IndexedVector& rhs) const override;
     void btran(::lp_solver::util::IndexedVector& rhs) const override;
@@ -27,8 +28,21 @@ private:
     static void applyEtaForward(std::vector<double>& v, const std::vector<EtaUpdate>& etas);
     static void applyEtaBackward(std::vector<double>& v, const std::vector<EtaUpdate>& etas);
 
+    int dimension_{0};
     detail::SparseLuEngine engine_;
     std::vector<EtaUpdate> eta_updates_;
+
+#ifdef LP_SOLVER_HAVE_UMFPACK
+    void clearUmfpackState();
+    [[nodiscard]] bool factorizeWithUmfpackDirect(const ::lp_solver::util::PackedMatrix& basis_matrix);
+    void umfpackSolve(int sys, ::lp_solver::util::IndexedVector& rhs) const;
+
+    bool use_umfpack_direct_{false};
+    std::vector<int> Ap_;
+    std::vector<int> Ai_;
+    std::vector<double> Ax_;
+    void* umf_numeric_{nullptr};
+#endif
 };
 
 }  // namespace linalg
