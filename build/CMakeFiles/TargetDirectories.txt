@@ -1,6 +1,0 @@
-E:/LinearProgramingSolver/build/CMakeFiles/lp_solver.dir
-E:/LinearProgramingSolver/build/CMakeFiles/lp_solver_smoke_tests.dir
-E:/LinearProgramingSolver/build/CMakeFiles/lp_solver_stress_tests.dir
-E:/LinearProgramingSolver/build/CMakeFiles/RUN_TESTS.dir
-E:/LinearProgramingSolver/build/CMakeFiles/ALL_BUILD.dir
-E:/LinearProgramingSolver/build/CMakeFiles/ZERO_CHECK.dir
