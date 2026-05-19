@@ -54,6 +54,8 @@ endif()
 add_library(lp_solver
     ${CMAKE_CURRENT_SOURCE_DIR}/src/util/indexed_vector.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/util/packed_matrix.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/io/mps_reader.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/io/netlib_standardizer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/linalg/sparse_triangular.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/linalg/sparse_lu_engine.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/linalg/factor_factory.cpp
@@ -116,6 +118,20 @@ target_link_libraries(lp_solver_hypersparse_triangular_tests PRIVATE lp_solver)
 
 add_test(NAME hypersparse_triangular_test COMMAND lp_solver_hypersparse_triangular_tests)
 
+add_executable(lp_solver_netlib_parser_tests
+    tests/netlib_parser_test.cpp
+)
+
+target_link_libraries(lp_solver_netlib_parser_tests PRIVATE lp_solver)
+
+add_test(NAME netlib_parser_test COMMAND lp_solver_netlib_parser_tests)
+
+add_executable(lp_solver_netlib_runner
+    tests/netlib_runner.cpp
+)
+
+target_link_libraries(lp_solver_netlib_runner PRIVATE lp_solver)
+
 set(_LP_SOLVER_TEST_ENV
     "OPENBLAS_NUM_THREADS=1"
     "GOTO_NUM_THREADS=1"
@@ -126,5 +142,6 @@ set_tests_properties(
     stress_test
     advanced_features_test
     hypersparse_triangular_test
+    netlib_parser_test
     PROPERTIES ENVIRONMENT "${_LP_SOLVER_TEST_ENV}"
 )

@@ -3,6 +3,8 @@
 #include "linalg/eigen_factor.hpp"
 #include "linalg/i_basis_factor.hpp"
 #include "linalg/umfpack_factor.hpp"
+#include "io/mps_reader.hpp"
+#include "io/netlib_standardizer.hpp"
 #include "model/problem_data.hpp"
 #include "model/solver_state.hpp"
 #include "presolve/presolver.hpp"

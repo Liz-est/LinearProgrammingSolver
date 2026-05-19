@@ -22,3 +22,7 @@ cmake-build-*/
 # Temporary files
 *.tmp
 *.log
+
+# test files
+.csv
+netlib/

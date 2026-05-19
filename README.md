@@ -80,6 +80,7 @@ When UMFPACK is linked, the build defines `LP_SOLVER_HAVE_UMFPACK=1` on the `lp_
 | `stress_test` | Medium-scale feasible-basis solve |
 | `advanced_features_test` | Presolve/postsolve (primal + dual), Big-M, DSE, ETA file, factor backends, default factor |
 | `hypersparse_triangular_test` | Gilbert–Peierls triangular solves vs dense reference |
+| `netlib_parser_test` | MPS subset parse + Netlib standardization smoke checks |
 
 ```bash
 ctest --test-dir build -C Debug --output-on-failure
@@ -90,6 +91,40 @@ Windows helper:
 ```powershell
 .\run-test-plan.ps1 -Config Debug -BuildDir build
 ```
+
+## Netlib Benchmark Workflow
+
+This repository includes a lightweight Netlib test path:
+
+- MPS parser + standardizer APIs: `lp_solver/io/mps_reader.hpp`, `lp_solver/io/netlib_standardizer.hpp`
+- Runner executable: `lp_solver_netlib_runner`
+- Batch script: `scripts/run-netlib.ps1`
+- Baseline file (starter set): `tests/netlib_baseline.csv`
+- Supported MPS subset and conversion notes: `docs/netlib_format_notes.md`
+
+Build the runner:
+
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
+cmake --build build --config Debug --target lp_solver_netlib_runner
+```
+
+Run a single Netlib model:
+
+```powershell
+.\build\Debug\lp_solver_netlib_runner.exe "D:\netlib\afiro.mps" --ref -4.6475314286E+02 --tol 1e-6
+```
+
+Run a batch with baseline comparison:
+
+```powershell
+.\scripts\run-netlib.ps1 -DataDir "D:\netlib" -BuildDir build -Config Debug -BaselineCsv tests/netlib_baseline.csv
+```
+
+Notes:
+
+- Decompress `.mps.gz` files before running (`.mps` only).
+- The standardizer converts general MPS rows/bounds into `Ax=b, x>=0` and constructs explicit basis indices for the slack columns.
 
 ## Usage
 

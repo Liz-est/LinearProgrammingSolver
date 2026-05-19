@@ -6,6 +6,7 @@
 #include <cmath>
 #include <limits>
 #include <stdexcept>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -110,6 +111,100 @@ std::vector<double> basicCosts(const model::ProblemData& prob, const model::Solv
     out.upper_bounds.push_back(1.0e30);
     return out;
 }
+
+bool findInitialBasisFromUnitColumns(const model::ProblemData& prob, model::SolverState& state) {
+    const int m = prob.numRows();
+    const int n = prob.numCols();
+    state.basic_indices.assign(m, -1);
+    std::vector<bool> col_used(static_cast<size_t>(n), false);
+
+    for (int j = 0; j < n; ++j) {
+        const auto col = prob.A.column(j);
+        if (col.numNonZeros() != 1) {
+            continue;
+        }
+        const int row = col.nonZeroIndices()[0];
+        const double a = col[0];
+        if (row < 0 || row >= m || state.basic_indices[static_cast<size_t>(row)] >= 0 || col_used[static_cast<size_t>(j)]) {
+            continue;
+        }
+        if (std::abs(std::abs(a) - 1.0) > 1e-9) {
+            continue;
+        }
+        state.basic_indices[static_cast<size_t>(row)] = j;
+        col_used[static_cast<size_t>(j)] = true;
+    }
+
+    for (int i = 0; i < m; ++i) {
+        if (state.basic_indices[static_cast<size_t>(i)] < 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
+void rebuildNonbasicIndices(const model::ProblemData& prob, model::SolverState& state) {
+    const int n = prob.numCols();
+    std::vector<bool> in_basis(static_cast<size_t>(n), false);
+    for (int b : state.basic_indices) {
+        if (b >= 0 && b < n) {
+            in_basis[static_cast<size_t>(b)] = true;
+        }
+    }
+    state.nonbasic_indices.clear();
+    for (int j = 0; j < n; ++j) {
+        if (!in_basis[static_cast<size_t>(j)]) {
+            state.nonbasic_indices.push_back(j);
+        }
+    }
+}
+
+double minReducedCost(const model::SolverState& state) {
+    double min_rc = 0.0;
+    for (double rc : state.reduced_costs) {
+        min_rc = std::min(min_rc, rc);
+    }
+    return min_rc;
+}
+
+bool mapInitialBasisThroughPresolve(
+    const std::vector<int>& caller_basis,
+    const presolve::Presolver::ReductionResult& reduction,
+    model::SolverState& state
+) {
+    const int m = reduction.reduced_problem.numRows();
+    const int n = reduction.reduced_problem.numCols();
+    if (m <= 0 || n <= 0 || static_cast<int>(caller_basis.size()) != reduction.original_num_rows) {
+        return false;
+    }
+
+    std::unordered_map<int, int> old_col_to_new;
+    old_col_to_new.reserve(reduction.kept_cols.size());
+    for (int new_col = 0; new_col < static_cast<int>(reduction.kept_cols.size()); ++new_col) {
+        old_col_to_new[reduction.kept_cols[static_cast<size_t>(new_col)]] = new_col;
+    }
+
+    state.basic_indices.assign(m, -1);
+    std::vector<bool> col_used(static_cast<size_t>(n), false);
+    for (int new_row = 0; new_row < m; ++new_row) {
+        const int old_row = reduction.kept_rows[static_cast<size_t>(new_row)];
+        if (old_row < 0 || old_row >= static_cast<int>(caller_basis.size())) {
+            return false;
+        }
+        const auto col_it = old_col_to_new.find(caller_basis[static_cast<size_t>(old_row)]);
+        if (col_it == old_col_to_new.end()) {
+            return false;
+        }
+        const int new_col = col_it->second;
+        if (col_used[static_cast<size_t>(new_col)]) {
+            return false;
+        }
+        state.basic_indices[static_cast<size_t>(new_row)] = new_col;
+        col_used[static_cast<size_t>(new_col)] = true;
+    }
+    return true;
+}
+
 }  // namespace
 
 DualSimplex::DualSimplex(
@@ -128,71 +223,107 @@ DualSimplex::Status DualSimplex::solve(
         throw std::invalid_argument("DualSimplex requires a non-null basis factor");
     }
 
+    const std::vector<int> caller_basic_indices = state.basic_indices;
+
     model::ProblemData work_prob = prob;
     presolve::Presolver presolver;
     presolve::Presolver::ReductionResult reduction;
     bool has_reduction = false;
     double objective_offset = 0.0;
-    if (cfg.use_presolve) {
-        auto reduced = presolver.run(prob);
-        if (reduced.status == presolve::Presolver::Status::Infeasible) {
+    bool use_presolve_now = cfg.use_presolve;
+    bool basis_ready = false;
+
+    for (int presolve_attempt = 0; presolve_attempt < 2 && !basis_ready; ++presolve_attempt) {
+        has_reduction = false;
+        objective_offset = 0.0;
+        if (use_presolve_now) {
+            auto reduced = presolver.run(prob);
+            if (reduced.status == presolve::Presolver::Status::Infeasible) {
+                if (observer_ != nullptr) {
+                    observer_->onTermination(state, "Presolve detected infeasibility");
+                }
+                return Status::Infeasible;
+            }
+            if (reduced.status == presolve::Presolver::Status::Unbounded) {
+                if (observer_ != nullptr) {
+                    observer_->onTermination(state, "Presolve detected unboundedness");
+                }
+                return Status::Unbounded;
+            }
+            has_reduction = true;
+            reduction = std::move(reduced);
+            work_prob = reduction.reduced_problem;
+            objective_offset = reduction.objective_offset;
+        } else {
+            work_prob = prob;
+        }
+
+        const int m = work_prob.numRows();
+        const int n = work_prob.numCols();
+        if (m <= 0 || n <= 0 || m > n) {
             if (observer_ != nullptr) {
-                observer_->onTermination(state, "Presolve detected infeasibility");
+                observer_->onTermination(state, "Invalid reduced dimensions");
             }
             return Status::Infeasible;
         }
-        if (reduced.status == presolve::Presolver::Status::Unbounded) {
-            if (observer_ != nullptr) {
-                observer_->onTermination(state, "Presolve detected unboundedness");
+
+        bool basis_valid = false;
+        if (has_reduction && mapInitialBasisThroughPresolve(caller_basic_indices, reduction, state)) {
+            basis_valid = true;
+        } else {
+            state.basic_indices = caller_basic_indices;
+            basis_valid = !has_reduction && state.basic_indices.size() == static_cast<size_t>(m);
+            if (basis_valid) {
+                std::vector<bool> in_basis_check(static_cast<size_t>(n), false);
+                for (int b : state.basic_indices) {
+                    if (b < 0 || b >= n || in_basis_check[static_cast<size_t>(b)]) {
+                        basis_valid = false;
+                        break;
+                    }
+                    in_basis_check[static_cast<size_t>(b)] = true;
+                }
             }
-            return Status::Unbounded;
         }
-        has_reduction = true;
-        reduction = std::move(reduced);
-        work_prob = reduction.reduced_problem;
-        objective_offset = reduction.objective_offset;
+
+        if (!basis_valid && !findInitialBasisFromUnitColumns(work_prob, state)) {
+            if (use_presolve_now) {
+                use_presolve_now = false;
+                if (observer_ != nullptr) {
+                    observer_->onTermination(state, "Presolve removed slack structure; retrying without presolve");
+                }
+                continue;
+            }
+            if (observer_ != nullptr) {
+                observer_->onTermination(state, "Could not build an initial basis");
+            }
+            return Status::Infeasible;
+        }
+        rebuildNonbasicIndices(work_prob, state);
+
+        basis_ready = initializeBasisAndReducedCosts(work_prob, state, cfg);
+        if (!basis_ready && findInitialBasisFromUnitColumns(work_prob, state)) {
+            rebuildNonbasicIndices(work_prob, state);
+            basis_ready = initializeBasisAndReducedCosts(work_prob, state, cfg);
+        }
+
+        if (!basis_ready && use_presolve_now) {
+            use_presolve_now = false;
+            if (observer_ != nullptr) {
+                observer_->onTermination(state, "Presolve basis unusable; retrying without presolve");
+            }
+            continue;
+        }
+
+        if (!basis_ready) {
+            if (observer_ != nullptr) {
+                observer_->onTermination(state, "Initial basis factorization failed");
+            }
+            return Status::Infeasible;
+        }
     }
 
     const int m = work_prob.numRows();
     const int n = work_prob.numCols();
-    if (m <= 0 || n <= 0 || m > n) {
-        if (observer_ != nullptr) {
-            observer_->onTermination(state, "Invalid reduced dimensions");
-        }
-        return Status::Infeasible;
-    }
-
-    if (state.basic_indices.size() != static_cast<size_t>(m)) {
-        state.basic_indices.resize(m);
-        for (int i = 0; i < m; ++i) {
-            state.basic_indices[i] = i;
-        }
-        state.nonbasic_indices.clear();
-    }
-
-    std::vector<bool> in_basis(n, false);
-    for (int b : state.basic_indices) {
-        if (b < 0 || b >= n || in_basis[b]) {
-            if (observer_ != nullptr) {
-                observer_->onTermination(state, "Invalid basic indices");
-            }
-            return Status::Infeasible;
-        }
-        in_basis[b] = true;
-    }
-    state.nonbasic_indices.clear();
-    for (int j = 0; j < n; ++j) {
-        if (!in_basis[j]) {
-            state.nonbasic_indices.push_back(j);
-        }
-    }
-
-    if (!initializeBasisAndReducedCosts(work_prob, state, cfg)) {
-        if (observer_ != nullptr) {
-            observer_->onTermination(state, "Initial basis factorization failed");
-        }
-        return Status::Infeasible;
-    }
     int artificial_column_index = -1;
     if (cfg.enable_big_m_phase_one &&
         !runBigMPhaseOne(work_prob, state, cfg, artificial_column_index)) {
@@ -220,7 +351,8 @@ DualSimplex::Status DualSimplex::solve(
             break;
         }
 
-               const int m_rows = work_prob.numRows();
+        const int m_rows = work_prob.numRows();
+
         const int n_cols = work_prob.numCols();
 
         util::IndexedVector rho(m_rows);
@@ -240,10 +372,16 @@ DualSimplex::Status DualSimplex::solve(
         util::IndexedVector aq = work_prob.A.column(entering_col);
         ftran(aq);
         if (std::abs(aq[leaving_row]) <= kTiny) {
-            if (observer_ != nullptr) {
-                observer_->onTermination(state, "Near-zero pivot element encountered");
+            if (cfg.refactor_frequency > 0 && factor_->etaFileLength() > 0 &&
+                factor_->factorize(buildBasisMatrix(work_prob, state))) {
+                ftran(aq);
             }
-            return Status::Infeasible;
+            if (std::abs(aq[leaving_row]) <= kTiny) {
+                if (observer_ != nullptr) {
+                    observer_->onTermination(state, "Near-zero pivot element encountered");
+                }
+                return Status::Infeasible;
+            }
         }
 
         const double ratio = state.reduced_costs.empty() ? 0.0 : std::abs(state.reduced_costs.front());

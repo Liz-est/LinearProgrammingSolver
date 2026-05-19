@@ -79,6 +79,7 @@ cmake -S . -B build -DLP_SOLVER_WITH_UMFPACK=OFF
 | `stress_test` | 中等规模可行基求解 |
 | `advanced_features_test` | 预处理/后处理（原始+对偶）、Big-M、DSE、ETA、默认因子、后端一致性 |
 | `hypersparse_triangular_test` | Gilbert–Peierls 三角解与稠密参考对比 |
+| `netlib_parser_test` | MPS 子集解析 + Netlib 标准化 smoke 检查 |
 
 ```bash
 ctest --test-dir build -C Debug --output-on-failure
@@ -89,6 +90,40 @@ Windows：
 ```powershell
 .\run-test-plan.ps1 -Config Debug -BuildDir build
 ```
+
+## Netlib 测试流程
+
+仓库内已提供一条轻量的 Netlib 测试路径：
+
+- MPS 解析与标准化接口：`lp_solver/io/mps_reader.hpp`、`lp_solver/io/netlib_standardizer.hpp`
+- 运行器可执行文件：`lp_solver_netlib_runner`
+- 批量脚本：`scripts/run-netlib.ps1`
+- 基准目标值（起步集）：`tests/netlib_baseline.csv`
+- 支持的 MPS 子集和转换说明：`docs/netlib_format_notes.md`
+
+构建 runner：
+
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
+cmake --build build --config Debug --target lp_solver_netlib_runner
+```
+
+单文件运行：
+
+```powershell
+.\build\Debug\lp_solver_netlib_runner.exe "D:\netlib\afiro.mps" --ref -4.6475314286E+02 --tol 1e-6
+```
+
+按基准批量运行：
+
+```powershell
+.\scripts\run-netlib.ps1 -DataDir "D:\netlib" -BuildDir build -Config Debug -BaselineCsv tests/netlib_baseline.csv
+```
+
+说明：
+
+- 请先将 `.mps.gz` 解压为 `.mps` 再运行。
+- 标准化器会把通用 MPS 约束/边界转换为 `Ax=b, x>=0`，并为每行 slack 列显式构造初始基。
 
 ## 使用示例
 
