@@ -1,4 +1,5 @@
 #include "../../include/lp_solver/simplex/dual_simplex.hpp"
+#include "../../include/lp_solver/simplex/detail/dse_weight_update.hpp"
 #include "../../include/lp_solver/presolve/presolver.hpp"
 
 #include <algorithm>
@@ -286,12 +287,12 @@ DualSimplex::Status DualSimplex::solve(
             reduced_primal[col] = state.x_basic[i];
         }
     }
-    state.dual_solution = state.dual_pi;
-
     if (has_reduction) {
         state.primal_solution = presolver.postsolvePrimal(reduction, reduced_primal);
+        state.dual_solution = presolver.postsolveDual(reduction, state.dual_pi);
     } else {
         state.primal_solution = std::move(reduced_primal);
+        state.dual_solution = state.dual_pi;
     }
 
     return Status::Optimal;
@@ -614,35 +615,17 @@ void DualSimplex::updateDuals(
     if (state.dse_weights.size() != static_cast<size_t>(prob.numRows())) {
         return;
     }
-    const double dp = ftran_col[leaving_row];
-    if (std::abs(dp) <= kTiny) {
-        return;
-    }
-
-    const double w_p_old = state.dse_weights[leaving_row];
     util::IndexedVector v_rhs(prob.numRows());
-    for (int i = 0; i < prob.numRows(); ++i) {
-        const double val = btran_row[i];
-        if (std::abs(val) > kTiny) {
-            v_rhs.set(i, val);
-        }
-    }
-    ftran(v_rhs);
-
-    for (int i = 0; i < prob.numRows(); ++i) {
-        if (i == leaving_row) {
-            state.dse_weights[i] = std::max(1.0, w_p_old / (dp * dp));
-            continue;
-        }
-        const double di = ftran_col[i];
-        if (std::abs(di) <= kTiny) {
-            continue;
-        }
-        const double ratio = di / dp;
-        const double vi = v_rhs[i];
-        const double next = state.dse_weights[i] - 2.0 * ratio * vi + ratio * ratio * w_p_old;
-        state.dse_weights[i] = std::max(1.0, next);
-    }
+    detail::goldfarbReidDseWeightUpdate(
+        leaving_row,
+        btran_row,
+        ftran_col,
+        v_rhs,
+        [this](util::IndexedVector& x) { ftran(x); },
+        state.dse_weights,
+        1.0,
+        kTiny
+    );
 }
 
 void DualSimplex::initializeDseWeights(model::SolverState& state) const {

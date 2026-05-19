@@ -91,7 +91,7 @@ void testDualSimplexLargeScaleFeasibleBasis() {
         state.basic_indices[i] = i;
     }
 
-    auto factor = lp_solver::linalg::makeFactor(lp_solver::linalg::FactorBackend::Eigen);
+    auto factor = lp_solver::linalg::makeDefaultFactor();
     lp_solver::simplex::DualSimplex solver(
         std::move(factor),
         std::unique_ptr<lp_solver::simplex::IRowPivot>{},

@@ -23,8 +23,19 @@ public:
     [[nodiscard]] virtual int etaFileLength() const { return 0; }
 };
 
-enum class FactorBackend { Eigen, Umfpack };
+enum class FactorBackend {
+    /// Prefer SuiteSparse UMFPACK when built with `LP_SOLVER_HAVE_UMFPACK`, otherwise Eigen SparseLU.
+    Default,
+    Eigen,
+    Umfpack
+};
 
-std::unique_ptr<IBasisFactor> makeFactor(FactorBackend backend);
+/// Resolved backend used by `FactorBackend::Default` for this build.
+[[nodiscard]] FactorBackend defaultFactorBackend();
+
+[[nodiscard]] std::unique_ptr<IBasisFactor> makeFactor(FactorBackend backend);
+
+/// `makeFactor(FactorBackend::Default)`.
+[[nodiscard]] std::unique_ptr<IBasisFactor> makeDefaultFactor();
 
 }  // namespace lp_solver::linalg

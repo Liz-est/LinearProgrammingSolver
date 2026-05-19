@@ -281,6 +281,73 @@ void validatePermOrThrow(const std::vector<int>& perm, int n, const char* name) 
         throw std::logic_error(std::string(name) + ": permutation size mismatch");
     }
 }
+
+void applyRowPermForwardLocal(const std::vector<int>& perm, int n, util::IndexedVector& x) {
+    const auto& raw = x.rawValues();
+    util::IndexedVector tmp(n);
+    for (int i = 0; i < n; ++i) {
+        const int src = perm[static_cast<size_t>(i)];
+        if (src >= 0 && src < n && std::abs(raw[static_cast<size_t>(src)]) > 1e-19) {
+            tmp.set(i, raw[static_cast<size_t>(src)]);
+        }
+    }
+    x.clear();
+    for (int idx : tmp.nonZeroIndices()) {
+        x.set(idx, tmp[idx]);
+    }
+}
+
+void applyRowPermInverseTransposeLocal(const std::vector<int>& perm, int n, util::IndexedVector& x) {
+    std::vector<int> inv;
+    buildInversePerm(perm, inv);
+    applyRowPermForwardLocal(inv, n, x);
+}
+
+bool sparseLuExtractMatchesEigenSolve(
+    const SparseLU<SpMat>& lu,
+    int n,
+    const std::vector<int>& perm_r,
+    const std::vector<int>& perm_c,
+    const std::vector<int>& Lp,
+    const std::vector<int>& Li,
+    const std::vector<double>& Lx,
+    const std::vector<int>& Up,
+    const std::vector<int>& Ui,
+    const std::vector<double>& Ux
+) {
+    std::vector<int> gp_mark(static_cast<size_t>(n), 0);
+    std::vector<int> gp_stack;
+    constexpr double kTol = 1e-9;
+    const int num_probes = std::min(n, 8);
+    for (int probe = 0; probe < num_probes; ++probe) {
+        Eigen::VectorXd eig_rhs = Eigen::VectorXd::Zero(n);
+        eig_rhs[probe % n] = 1.0;
+        if (n > 1) {
+            eig_rhs[(probe + 1) % n] = 0.25 * static_cast<double>(probe + 1);
+        }
+        const Eigen::VectorXd eig_sol = lu.solve(eig_rhs);
+
+        util::IndexedVector rhs(n);
+        rhs.clear();
+        rhs.set(probe % n, 1.0);
+        if (n > 1) {
+            rhs.set((probe + 1) % n, 0.25 * static_cast<double>(probe + 1));
+        }
+        applyRowPermForwardLocal(perm_r, n, rhs);
+        CscMatrixView L{n, Lp.data(), Li.data(), Lx.data()};
+        gpLowerUnitSolve(L, rhs, gp_mark, gp_stack);
+        CscMatrixView U{n, Up.data(), Ui.data(), Ux.data()};
+        gpUpperSolve(U, rhs, gp_mark, gp_stack, false);
+        applyRowPermInverseTransposeLocal(perm_c, n, rhs);
+
+        for (int i = 0; i < n; ++i) {
+            if (std::abs(rhs[i] - eig_sol[static_cast<Eigen::Index>(i)]) > kTol) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
 }  // namespace
 
 bool SparseLuEngine::factorize(const util::PackedMatrix& basis_matrix) {
@@ -308,9 +375,6 @@ bool SparseLuEngine::factorize(const util::PackedMatrix& basis_matrix) {
         dense_piv_.clear();
         return false;
     }
-    use_dense_lu_ = true;
-    factor_ok_ = true;
-    return true;
 
     SpMat A;
     packedToEigen(basis_matrix, A);
@@ -390,6 +454,10 @@ bool SparseLuEngine::factorize(const util::PackedMatrix& basis_matrix) {
 
     gp_mark_.assign(static_cast<size_t>(n_), 0);
     gp_stack_.assign(static_cast<size_t>(n_), 0);
+
+    use_dense_lu_ = !sparseLuExtractMatchesEigenSolve(
+        lu, n_, perm_r_, perm_c_, Lp_, Li_, Lx_, Up_, Ui_, Ux_
+    );
 
     factor_ok_ = true;
     return true;
@@ -512,7 +580,7 @@ void SparseLuEngine::ftran(util::IndexedVector& rhs) const {
     CscMatrixView U{ n_, Up_.data(), Ui_.data(), Ux_.data() };
     gpUpperSolve(U, rhs, gp_mark_, gp_stack_, false);
 
-    applyColPermForward(perm_c_, rhs);
+    applyRowPermInverseTranspose(perm_c_, rhs);
 }
 
 void SparseLuEngine::btran(util::IndexedVector& rhs) const {
@@ -526,7 +594,7 @@ void SparseLuEngine::btran(util::IndexedVector& rhs) const {
         denseLuSolveTranspose(dense_lu_, dense_piv_, n_, rhs);
         return;
     }
-    applyColPermInverseTranspose(perm_c_, rhs);
+    applyColPermForward(perm_c_, rhs);
 
     CscMatrixView Ut{ n_, Ut_p_.data(), Ut_i_.data(), Ut_x_.data() };
     gpLowerDiagSolve(Ut, rhs, gp_mark_, gp_stack_);

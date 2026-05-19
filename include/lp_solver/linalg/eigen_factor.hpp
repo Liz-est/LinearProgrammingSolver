@@ -1,8 +1,7 @@
 #pragma once
 
-#include <vector>
-
 #include "detail/sparse_lu_engine.hpp"
+#include "eta_file.hpp"
 #include "i_basis_factor.hpp"
 
 namespace lp_solver::linalg {
@@ -18,16 +17,8 @@ public:
     [[nodiscard]] int etaFileLength() const override;
 
 private:
-    struct EtaUpdate {
-        int pivot_row{0};
-        std::vector<double> d;
-    };
-
-    static void applyEtaForward(std::vector<double>& v, const std::vector<EtaUpdate>& etas);
-    static void applyEtaBackward(std::vector<double>& v, const std::vector<EtaUpdate>& etas);
-
     detail::SparseLuEngine engine_;
-    std::vector<EtaUpdate> eta_updates_;
+    EtaFile eta_file_;
 };
 
 }  // namespace lp_solver::linalg

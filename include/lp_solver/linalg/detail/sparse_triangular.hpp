@@ -15,6 +15,8 @@ struct CscMatrixView {
     const double* values{nullptr};
 };
 
+/// Gilbert–Peierls hypersparse solve: reachability + triangular substitution in O(nnz) work.
+/// `mark` and `stack` are reused workspaces; `stack` holds the topological pattern during the solve.
 /// Solve L x = b in place, where L is **unit** lower triangular (diagonal not stored),
 /// CSC format: column j holds entries L(i,j) with i > j only.
 void gpLowerUnitSolve(const CscMatrixView& L, util::IndexedVector& x, std::vector<int>& mark, std::vector<int>& stack);

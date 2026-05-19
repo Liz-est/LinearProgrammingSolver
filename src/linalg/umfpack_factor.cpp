@@ -12,8 +12,6 @@
 namespace lp_solver::linalg {
 
 namespace {
-constexpr double kSingularTol = 1e-12;
-
 std::vector<double> indexedToDense(const util::IndexedVector& rhs, int n) {
     std::vector<double> dense(static_cast<size_t>(n), 0.0);
     const auto& raw = rhs.rawValues();
@@ -172,44 +170,8 @@ void UmfpackFactor::umfpackSolve(int sys, util::IndexedVector& rhs) const {
 }
 #endif
 
-void UmfpackFactor::applyEtaForward(std::vector<double>& v, const std::vector<EtaUpdate>& etas) {
-    for (const auto& eta : etas) {
-        const int p = eta.pivot_row;
-        const double dp = eta.d[static_cast<size_t>(p)];
-        if (std::abs(dp) <= kSingularTol) {
-            continue;
-        }
-        const double xp = v[static_cast<size_t>(p)] / dp;
-        for (int i = 0; i < static_cast<int>(v.size()); ++i) {
-            if (i == p) {
-                continue;
-            }
-            v[static_cast<size_t>(i)] -= eta.d[static_cast<size_t>(i)] * xp;
-        }
-        v[static_cast<size_t>(p)] = xp;
-    }
-}
-
-void UmfpackFactor::applyEtaBackward(std::vector<double>& v, const std::vector<EtaUpdate>& etas) {
-    for (auto it = etas.rbegin(); it != etas.rend(); ++it) {
-        const int p = it->pivot_row;
-        const double dp = it->d[static_cast<size_t>(p)];
-        if (std::abs(dp) <= kSingularTol) {
-            continue;
-        }
-        double sum = 0.0;
-        for (int i = 0; i < static_cast<int>(v.size()); ++i) {
-            if (i == p) {
-                continue;
-            }
-            sum += it->d[static_cast<size_t>(i)] * v[static_cast<size_t>(i)];
-        }
-        v[static_cast<size_t>(p)] = (v[static_cast<size_t>(p)] - sum) / dp;
-    }
-}
-
 bool UmfpackFactor::factorize(const util::PackedMatrix& basis_matrix) {
-    eta_updates_.clear();
+    eta_file_.clear();
     dimension_ = basis_matrix.numRows();
 #ifdef LP_SOLVER_HAVE_UMFPACK
     clearUmfpackState();
@@ -236,19 +198,11 @@ void UmfpackFactor::ftran(util::IndexedVector& rhs) const {
         }
         engine_.ftran(rhs);
     }
-    if (!eta_updates_.empty()) {
-        auto v = indexedToDense(rhs, dimension_);
-        applyEtaForward(v, eta_updates_);
-        denseToIndexed(v, rhs);
-    }
+    eta_file_.applyForward(rhs);
 }
 
 void UmfpackFactor::btran(util::IndexedVector& rhs) const {
-    if (!eta_updates_.empty()) {
-        auto v = indexedToDense(rhs, dimension_);
-        applyEtaBackward(v, eta_updates_);
-        denseToIndexed(v, rhs);
-    }
+    eta_file_.applyBackward(rhs);
     bool solved = false;
 #ifdef LP_SOLVER_HAVE_UMFPACK
     if (use_umfpack_direct_) {
@@ -265,19 +219,9 @@ void UmfpackFactor::btran(util::IndexedVector& rhs) const {
 }
 
 void UmfpackFactor::updateEta(int pivot_row, const util::IndexedVector& ftran_col) {
-    const int n = dimension_;
-    if (pivot_row < 0 || pivot_row >= n) {
-        return;
-    }
-    EtaUpdate eta;
-    eta.pivot_row = pivot_row;
-    eta.d = indexedToDense(ftran_col, n);
-    if (eta.d[static_cast<size_t>(pivot_row)] == 0.0) {
-        eta.d[static_cast<size_t>(pivot_row)] = 1.0;
-    }
-    eta_updates_.push_back(std::move(eta));
+    eta_file_.append(pivot_row, ftran_col);
 }
 
-int UmfpackFactor::etaFileLength() const { return static_cast<int>(eta_updates_.size()); }
+int UmfpackFactor::etaFileLength() const { return eta_file_.length(); }
 
 }  // namespace lp_solver::linalg

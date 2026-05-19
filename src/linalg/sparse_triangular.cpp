@@ -1,7 +1,6 @@
 #include "../../include/lp_solver/linalg/detail/sparse_triangular.hpp"
 
 #include <cmath>
-#include <cstdint>
 #include <stdexcept>
 #include <vector>
 
@@ -10,39 +9,51 @@ namespace lp_solver::linalg::detail {
 namespace {
 constexpr double kZeroTol = 1e-19;
 
-void dfsMarkLowerReach(
-    int j,
-    const CscMatrixView& L,
-    std::vector<std::uint8_t>& marked
-) {
-    if (marked[static_cast<size_t>(j)]) {
-        return;
+void clearReachPattern(std::vector<int>& mark, std::vector<int>& pattern) {
+    for (int j : pattern) {
+        mark[static_cast<size_t>(j)] = 0;
     }
-    marked[static_cast<size_t>(j)] = 1;
-    for (int p = L.col_ptr[j]; p < L.col_ptr[j + 1]; ++p) {
-        const int i = L.row_ind[p];
-        if (i > j) {
-            dfsMarkLowerReach(i, L, marked);
-        }
-    }
+    pattern.clear();
 }
 
-void dfsMarkLowerDiagReach(
+void reachLowerUnit(
     int j,
     const CscMatrixView& L,
-    std::vector<std::uint8_t>& marked
+    std::vector<int>& mark,
+    std::vector<int>& pattern
 ) {
-    if (marked[static_cast<size_t>(j)]) {
+    if (mark[static_cast<size_t>(j)] != 0) {
         return;
     }
-    marked[static_cast<size_t>(j)] = 1;
+    mark[static_cast<size_t>(j)] = 1;
     for (int p = L.col_ptr[j]; p < L.col_ptr[j + 1]; ++p) {
         const int i = L.row_ind[p];
         if (i > j) {
-            dfsMarkLowerDiagReach(i, L, marked);
+            reachLowerUnit(i, L, mark, pattern);
         }
     }
+    pattern.push_back(j);
 }
+
+void reachUpper(
+    int j,
+    const CscMatrixView& U,
+    std::vector<int>& mark,
+    std::vector<int>& pattern
+) {
+    if (mark[static_cast<size_t>(j)] != 0) {
+        return;
+    }
+    mark[static_cast<size_t>(j)] = 1;
+    for (int p = U.col_ptr[j]; p < U.col_ptr[j + 1]; ++p) {
+        const int i = U.row_ind[p];
+        if (i < j) {
+            reachUpper(i, U, mark, pattern);
+        }
+    }
+    pattern.push_back(j);
+}
+
 }  // namespace
 
 void gpLowerUnitSolve(
@@ -51,8 +62,6 @@ void gpLowerUnitSolve(
     std::vector<int>& mark,
     std::vector<int>& stack
 ) {
-    (void)mark;
-    (void)stack;
     const int n = L.n;
     if (n <= 0) {
         return;
@@ -60,23 +69,32 @@ void gpLowerUnitSolve(
     if (x.capacity() < n) {
         throw std::logic_error("gpLowerUnitSolve: rhs capacity mismatch");
     }
-    std::vector<std::uint8_t> marked(static_cast<size_t>(n), 0);
-    for (int k = 0; k < n; ++k) {
-        if (std::abs(x[k]) > kZeroTol) {
-            dfsMarkLowerReach(k, L, marked);
+    if (static_cast<int>(mark.size()) < n) {
+        mark.assign(static_cast<size_t>(n), 0);
+    }
+
+    stack.clear();
+    for (int k : x.nonZeroIndices()) {
+        if (std::abs(x[k]) > kZeroTol && mark[static_cast<size_t>(k)] == 0) {
+            reachLowerUnit(k, L, mark, stack);
         }
     }
-    for (int j = 0; j < n; ++j) {
-        if (!marked[static_cast<size_t>(j)]) {
+
+    for (auto it = stack.rbegin(); it != stack.rend(); ++it) {
+        const int j = *it;
+        const double xj = x[j];
+        if (std::abs(xj) <= kZeroTol) {
             continue;
         }
         for (int p = L.col_ptr[j]; p < L.col_ptr[j + 1]; ++p) {
             const int i = L.row_ind[p];
             if (i > j) {
-                x.add(i, -L.values[p] * x[j]);
+                x.add(i, -L.values[p] * xj);
             }
         }
     }
+
+    clearReachPattern(mark, stack);
 }
 
 void gpUpperSolve(
@@ -86,8 +104,6 @@ void gpUpperSolve(
     std::vector<int>& stack,
     bool implicit_unit_diagonal
 ) {
-    (void)mark;
-    (void)stack;
     const int n = U.n;
     if (n <= 0) {
         return;
@@ -95,7 +111,19 @@ void gpUpperSolve(
     if (x.capacity() < n) {
         throw std::logic_error("gpUpperSolve: rhs capacity mismatch");
     }
-    for (int j = n - 1; j >= 0; --j) {
+    if (static_cast<int>(mark.size()) < n) {
+        mark.assign(static_cast<size_t>(n), 0);
+    }
+
+    stack.clear();
+    for (int k : x.nonZeroIndices()) {
+        if (std::abs(x[k]) > kZeroTol && mark[static_cast<size_t>(k)] == 0) {
+            reachUpper(k, U, mark, stack);
+        }
+    }
+
+    for (auto it = stack.rbegin(); it != stack.rend(); ++it) {
+        const int j = *it;
         double diag = 0.0;
         for (int p = U.col_ptr[j]; p < U.col_ptr[j + 1]; ++p) {
             if (U.row_ind[p] == j) {
@@ -108,6 +136,7 @@ void gpUpperSolve(
             if (implicit_unit_diagonal) {
                 diag = 1.0;
             } else {
+                clearReachPattern(mark, stack);
                 throw std::runtime_error("gpUpperSolve: missing or singular diagonal");
             }
         }
@@ -115,12 +144,13 @@ void gpUpperSolve(
         x.set(j, xj);
         for (int p = U.col_ptr[j]; p < U.col_ptr[j + 1]; ++p) {
             const int i = U.row_ind[p];
-            const double v = U.values[p];
             if (i < j) {
-                x.add(i, -v * xj);
+                x.add(i, -U.values[p] * xj);
             }
         }
     }
+
+    clearReachPattern(mark, stack);
 }
 
 void gpLowerDiagSolve(
@@ -129,8 +159,6 @@ void gpLowerDiagSolve(
     std::vector<int>& mark,
     std::vector<int>& stack
 ) {
-    (void)mark;
-    (void)stack;
     const int n = L.n;
     if (n <= 0) {
         return;
@@ -138,7 +166,19 @@ void gpLowerDiagSolve(
     if (x.capacity() < n) {
         throw std::logic_error("gpLowerDiagSolve: rhs capacity mismatch");
     }
-    for (int j = 0; j < n; ++j) {
+    if (static_cast<int>(mark.size()) < n) {
+        mark.assign(static_cast<size_t>(n), 0);
+    }
+
+    stack.clear();
+    for (int k : x.nonZeroIndices()) {
+        if (std::abs(x[k]) > kZeroTol && mark[static_cast<size_t>(k)] == 0) {
+            reachLowerUnit(k, L, mark, stack);
+        }
+    }
+
+    for (auto it = stack.rbegin(); it != stack.rend(); ++it) {
+        const int j = *it;
         double diag = 0.0;
         for (int p = L.col_ptr[j]; p < L.col_ptr[j + 1]; ++p) {
             if (L.row_ind[p] == j) {
@@ -147,18 +187,20 @@ void gpLowerDiagSolve(
             }
         }
         if (std::abs(diag) <= kZeroTol) {
+            clearReachPattern(mark, stack);
             throw std::runtime_error("gpLowerDiagSolve: missing or singular diagonal");
         }
         const double xj = x[j] / diag;
         x.set(j, xj);
         for (int p = L.col_ptr[j]; p < L.col_ptr[j + 1]; ++p) {
             const int i = L.row_ind[p];
-            const double v = L.values[p];
             if (i > j) {
-                x.add(i, -v * xj);
+                x.add(i, -L.values[p] * xj);
             }
         }
     }
+
+    clearReachPattern(mark, stack);
 }
 
 }  // namespace lp_solver::linalg::detail

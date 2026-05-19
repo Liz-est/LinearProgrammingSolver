@@ -57,6 +57,7 @@ add_library(lp_solver
     ${CMAKE_CURRENT_SOURCE_DIR}/src/linalg/sparse_triangular.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/linalg/sparse_lu_engine.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/linalg/factor_factory.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/linalg/eta_file.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/linalg/eigen_factor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/linalg/umfpack_factor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/presolve/presolver.cpp
@@ -107,6 +108,14 @@ target_link_libraries(lp_solver_advanced_features_tests PRIVATE lp_solver)
 
 add_test(NAME advanced_features_test COMMAND lp_solver_advanced_features_tests)
 
+add_executable(lp_solver_hypersparse_triangular_tests
+    tests/hypersparse_triangular_test.cpp
+)
+
+target_link_libraries(lp_solver_hypersparse_triangular_tests PRIVATE lp_solver)
+
+add_test(NAME hypersparse_triangular_test COMMAND lp_solver_hypersparse_triangular_tests)
+
 set(_LP_SOLVER_TEST_ENV
     "OPENBLAS_NUM_THREADS=1"
     "GOTO_NUM_THREADS=1"
@@ -116,5 +125,6 @@ set_tests_properties(
     smoke_test
     stress_test
     advanced_features_test
+    hypersparse_triangular_test
     PROPERTIES ENVIRONMENT "${_LP_SOLVER_TEST_ENV}"
 )

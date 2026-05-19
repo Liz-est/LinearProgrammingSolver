@@ -1,9 +1,11 @@
+#include "../include/lp_solver/linalg/eta_file.hpp"
 #include "../include/lp_solver/linalg/i_basis_factor.hpp"
 #include "../include/lp_solver/linalg/eigen_factor.hpp"
 #include "../include/lp_solver/linalg/umfpack_factor.hpp"
 #include "../include/lp_solver/model/problem_data.hpp"
 #include "../include/lp_solver/model/solver_state.hpp"
 #include "../include/lp_solver/presolve/presolver.hpp"
+#include "../include/lp_solver/simplex/detail/dse_weight_update.hpp"
 #include "../include/lp_solver/simplex/dual_simplex.hpp"
 #include "../include/lp_solver/util/indexed_vector.hpp"
 #include "../include/lp_solver/util/packed_matrix.hpp"
@@ -145,6 +147,90 @@ void testBigMEntryPathRuns() {
            "big-M path should not immediately fail");
 }
 
+void testPresolveAndPostsolveDual() {
+    lp_solver::util::PackedMatrix::Builder builder(2, 3);
+    builder.appendColumn(std::vector<int>{0}, std::vector<double>{1.0});
+    builder.appendColumn(std::vector<int>{}, std::vector<double>{});
+    builder.appendColumn(std::vector<int>{1}, std::vector<double>{1.0});
+    lp_solver::model::ProblemData prob{
+        std::move(builder).build(),
+        std::vector<double>{2.0, 1.0, 3.0},
+        std::vector<double>{4.0, 2.0},
+        std::vector<double>(3, 0.0),
+        std::vector<double>(3, 1.0e30)
+    };
+
+    lp_solver::presolve::Presolver presolver;
+    const auto reduced = presolver.run(prob);
+    expect(reduced.status == lp_solver::presolve::Presolver::Status::Reduced, "presolve should reduce");
+    expect(reduced.original_num_rows == 2, "original row count");
+
+    expect(reduced.reduced_problem.numRows() == 0, "both rows are singleton-eliminated");
+    expect(reduced.reduced_problem.numCols() == 0, "all columns fixed or empty");
+
+    const std::vector<double> core_primal;
+    const std::vector<double> core_dual;
+
+    const auto full_x = presolver.postsolvePrimal(reduced, core_primal);
+    const auto full_pi = presolver.postsolveDual(reduced, core_dual);
+
+    expect(static_cast<int>(full_x.size()) == prob.numCols(), "primal postsolve size");
+    expect(static_cast<int>(full_pi.size()) == prob.numRows(), "dual postsolve size");
+    expect(std::abs(full_x[0] - 4.0) < 1e-10, "singleton fixed primal x0");
+    expect(std::abs(full_x[1]) < 1e-10, "empty column primal x1");
+    expect(std::abs(full_x[2] - 2.0) < 1e-10, "second singleton fixed primal x2");
+    expect(std::abs(full_pi[0] - 2.0) < 1e-10, "first singleton recovered dual pi0");
+    expect(std::abs(full_pi[1] - 3.0) < 1e-10, "second singleton recovered dual pi1");
+
+    // Complementary slackness for fixed positive column 0: c0 - A^T pi = 0 on column 0.
+    const auto col0 = prob.A.column(0);
+    double rc0 = prob.c[0];
+    for (int r : col0.nonZeroIndices()) {
+        rc0 -= full_pi[static_cast<size_t>(r)] * col0[r];
+    }
+    expect(std::abs(rc0) < 1e-10, "recovered dual satisfies reduced cost for fixed column");
+}
+
+void testPresolveSolvePostsolveDualEndToEnd() {
+    // One singleton row (x0 = 4); second row couples x1 + x2 = 5 so the core stays 1x2.
+    lp_solver::util::PackedMatrix::Builder builder(2, 3);
+    builder.appendColumn(std::vector<int>{0}, std::vector<double>{1.0});
+    builder.appendColumn(std::vector<int>{1}, std::vector<double>{1.0});
+    builder.appendColumn(std::vector<int>{1}, std::vector<double>{1.0});
+    lp_solver::model::ProblemData prob{
+        std::move(builder).build(),
+        std::vector<double>{1.0, 2.0, 3.0},
+        std::vector<double>{4.0, 5.0},
+        std::vector<double>(3, 0.0),
+        std::vector<double>(3, 1.0e30)
+    };
+
+    lp_solver::model::SolverState state;
+    state.basic_indices = {0, 1};
+
+    auto factor = lp_solver::linalg::makeFactor(lp_solver::linalg::FactorBackend::Eigen);
+    lp_solver::simplex::DualSimplex solver(std::move(factor), nullptr, nullptr);
+
+    lp_solver::simplex::SolverConfig cfg;
+    cfg.max_iterations = 100;
+    cfg.use_presolve = true;
+    cfg.enable_big_m_phase_one = false;
+
+    const auto status = solver.solve(prob, state, cfg);
+    expect(status == lp_solver::simplex::DualSimplex::Status::Optimal, "solve should be optimal");
+
+    expect(static_cast<int>(state.primal_solution.size()) == prob.numCols(), "full primal size");
+    expect(static_cast<int>(state.dual_solution.size()) == prob.numRows(), "full dual size");
+    expect(std::abs(state.primal_solution[0] - 4.0) < 1e-7, "optimal x0");
+    expect(std::abs(state.primal_solution[1] - 5.0) < 1e-7, "optimal x1");
+    expect(std::abs(state.primal_solution[2]) < 1e-7, "optimal x2");
+    expect(std::abs(state.dual_solution[0] - 1.0) < 1e-6, "optimal pi0 from postsolve");
+    expect(std::abs(state.dual_solution[1] - 2.0) < 1e-6, "optimal pi1 on surviving row");
+
+    const auto ax = prob.A.multiply(state.primal_solution);
+    expect(maxAbsDiff(ax, prob.b) < 1e-6, "primal feasibility on original problem");
+}
+
 void testPresolveAndPostsolve() {
     lp_solver::util::PackedMatrix::Builder builder(2, 3);
     builder.appendColumn(std::vector<int>{0}, std::vector<double>{1.0});         // singleton row variable
@@ -164,6 +250,80 @@ void testPresolveAndPostsolve() {
     const std::vector<double> core_solution(reduced.reduced_problem.numCols(), 1.5);
     const auto restored = presolver.postsolvePrimal(reduced, core_solution);
     expect(static_cast<int>(restored.size()) == prob.numCols(), "postsolve size mismatch");
+}
+
+void testDefaultFactorBackendSelection() {
+#if LP_SOLVER_HAVE_UMFPACK
+    expect(
+        lp_solver::linalg::defaultFactorBackend() == lp_solver::linalg::FactorBackend::Umfpack,
+        "default backend should be UMFPACK when SuiteSparse is linked"
+    );
+#else
+    expect(
+        lp_solver::linalg::defaultFactorBackend() == lp_solver::linalg::FactorBackend::Eigen,
+        "default backend should be Eigen when UMFPACK is unavailable"
+    );
+#endif
+
+    lp_solver::util::PackedMatrix::Builder b(3, 3);
+    b.appendColumn(std::vector<int>{0}, std::vector<double>{1.0});
+    b.appendColumn(std::vector<int>{1}, std::vector<double>{1.0});
+    b.appendColumn(std::vector<int>{2}, std::vector<double>{1.0});
+    const auto I = std::move(b).build();
+
+    auto from_default = lp_solver::linalg::makeDefaultFactor();
+    auto from_enum = lp_solver::linalg::makeFactor(lp_solver::linalg::FactorBackend::Default);
+    auto from_resolved = lp_solver::linalg::makeFactor(lp_solver::linalg::defaultFactorBackend());
+
+    expect(from_default->factorize(I), "makeDefaultFactor should factorize");
+    expect(from_enum->factorize(I), "makeFactor(Default) should factorize");
+    expect(from_resolved->factorize(I), "makeFactor(resolved default) should factorize");
+
+#if LP_SOLVER_HAVE_UMFPACK
+    expect(
+        dynamic_cast<lp_solver::linalg::UmfpackFactor*>(from_default.get()) != nullptr,
+        "default factor should be UmfpackFactor"
+    );
+#else
+    expect(
+        dynamic_cast<lp_solver::linalg::EigenFactor*>(from_default.get()) != nullptr,
+        "default factor should be EigenFactor"
+    );
+#endif
+
+    lp_solver::util::IndexedVector rhs(3);
+    rhs.set(0, 1.0);
+    rhs.set(2, -0.5);
+    auto rhs_enum = rhs;
+    auto rhs_resolved = rhs;
+
+    from_default->ftran(rhs);
+    from_enum->ftran(rhs_enum);
+    from_resolved->ftran(rhs_resolved);
+    expect(maxAbsDiff(toDense(rhs), toDense(rhs_enum)) < 1e-12, "Default enum matches makeDefaultFactor ftran");
+    expect(maxAbsDiff(toDense(rhs), toDense(rhs_resolved)) < 1e-12, "resolved backend matches default ftran");
+}
+
+void testDualSimplexWithDefaultFactor() {
+    lp_solver::model::ProblemData prob{
+        buildSmallMatrix(),
+        std::vector<double>{0.0, 0.0, 1.0},
+        std::vector<double>{1.0, 1.0},
+        std::vector<double>(3, 0.0),
+        std::vector<double>(3, 1.0e30)
+    };
+
+    lp_solver::model::SolverState state;
+    state.basic_indices = {0, 1};
+    state.x_basic = {1.0, 1.0};
+
+    lp_solver::simplex::SolverConfig cfg;
+    cfg.use_presolve = false;
+    cfg.enable_big_m_phase_one = false;
+
+    lp_solver::simplex::DualSimplex solver(lp_solver::linalg::makeDefaultFactor(), nullptr, nullptr);
+    const auto status = solver.solve(prob, state, cfg);
+    expect(status == lp_solver::simplex::DualSimplex::Status::Optimal, "DualSimplex with default factor should be optimal");
 }
 
 void testSparseFactorBackendsAgreeOnSolve() {
@@ -230,6 +390,35 @@ void testEigenFactorRandomResiduals() {
     }
 }
 
+void testEtaFileSparseStorageAndApply() {
+    constexpr int n = 200;
+    lp_solver::linalg::EtaFile file;
+    lp_solver::util::IndexedVector eta_vec(n);
+    eta_vec.set(3, 2.0);
+    eta_vec.set(99, -1.5);
+    eta_vec.set(150, 0.5);
+    file.append(150, eta_vec);
+    expect(file.length() == 1, "eta file length");
+    expect(file.updates().size() == 1, "one eta update");
+    expect(file.updates().front().indices.size() == 3, "store sparse eta nnz only");
+
+    lp_solver::util::IndexedVector v(n);
+    v.set(10, 1.0);
+    file.applyForward(v);
+
+    lp_solver::util::IndexedVector v_ref(n);
+    v_ref.set(10, 1.0);
+    const double xp = v_ref[150] / 0.5;
+    v_ref.set(150, xp);
+    v_ref.add(3, -2.0 * xp);
+    v_ref.add(99, 1.5 * xp);
+
+    expect(std::abs(v[10] - v_ref[10]) < 1e-12, "untouched index unchanged");
+    expect(std::abs(v[150] - v_ref[150]) < 1e-12, "sparse forward pivot");
+    expect(std::abs(v[3] - v_ref[3]) < 1e-12, "sparse forward fill");
+    expect(std::abs(v[99] - v_ref[99]) < 1e-12, "sparse forward fill");
+}
+
 void testEigenFactorEtaUpdateMath() {
     lp_solver::util::PackedMatrix::Builder b(3, 3);
     b.appendColumn(std::vector<int>{0}, std::vector<double>{1.0});
@@ -277,16 +466,156 @@ void testEigenFactorEtaUpdateMath() {
     expect(maxAbsDiff(got_b, expect_b) < 1e-10, "btran eta composition mismatch");
 }
 
+void testGoldfarbReidDseHypersparseMatchesDense() {
+    constexpr int m = 5;
+    lp_solver::util::PackedMatrix::Builder b(m, m);
+    b.appendColumn(std::vector<int>{0}, std::vector<double>{1.0});
+    b.appendColumn(std::vector<int>{0, 1}, std::vector<double>{1.0, 1.0});
+    b.appendColumn(std::vector<int>{1, 2}, std::vector<double>{1.0, 1.0});
+    b.appendColumn(std::vector<int>{2, 3}, std::vector<double>{1.0, 1.0});
+    b.appendColumn(std::vector<int>{3, 4}, std::vector<double>{1.0, 1.0});
+    const auto basis = std::move(b).build();
+
+    lp_solver::linalg::EigenFactor factor;
+    expect(factor.factorize(basis), "DSE weight test factorization failed");
+
+    lp_solver::util::IndexedVector eta0(m);
+    eta0.set(0, 2.0);
+    eta0.set(2, -0.5);
+    factor.updateEta(0, eta0);
+
+    lp_solver::util::IndexedVector eta2(m);
+    eta2.set(2, 1.25);
+    eta2.set(4, 0.75);
+    factor.updateEta(2, eta2);
+
+    const int leaving_row = 2;
+    lp_solver::util::IndexedVector rho(m);
+    rho.set(leaving_row, 1.0);
+    factor.btran(rho);
+
+    lp_solver::util::IndexedVector aq(m);
+    aq.set(0, 1.0);
+    aq.set(3, -0.5);
+    factor.ftran(aq);
+
+    const auto apply_ftran = [&factor](lp_solver::util::IndexedVector& v) { factor.ftran(v); };
+
+    std::vector<double> w_sparse(m, 1.0);
+    std::vector<double> w_dense(m, 1.0);
+    lp_solver::util::IndexedVector v_sparse(m);
+    lp_solver::util::IndexedVector v_dense(m);
+
+    lp_solver::simplex::detail::goldfarbReidDseWeightUpdate(
+        leaving_row, rho, aq, v_sparse, apply_ftran, w_sparse);
+    lp_solver::simplex::detail::goldfarbReidDseWeightUpdateDense(
+        leaving_row, rho, aq, v_dense, apply_ftran, w_dense);
+
+    expect(maxAbsDiff(w_sparse, w_dense) < 1e-12, "hypersparse DSE update should match dense reference");
+}
+
+lp_solver::util::PackedMatrix buildIdentityWithSparseExtraCols(int m, int n) {
+    lp_solver::util::PackedMatrix::Builder builder(m, n);
+    for (int j = 0; j < m; ++j) {
+        builder.appendColumn(std::vector<int>{j}, std::vector<double>{1.0});
+    }
+    for (int j = m; j < n; ++j) {
+        const int r1 = j % m;
+        const int r2 = (j * 37 + 11) % m;
+        if (r1 == r2) {
+            builder.appendColumn(std::vector<int>{r1}, std::vector<double>{0.5});
+        } else {
+            builder.appendColumn(std::vector<int>{r1, r2}, std::vector<double>{0.5, -0.25});
+        }
+    }
+    return std::move(builder).build();
+}
+
+void testDseSolveOnSparseModel() {
+    constexpr int m = 80;
+    constexpr int n = 160;
+    lp_solver::model::ProblemData prob{
+        buildIdentityWithSparseExtraCols(m, n),
+        std::vector<double>(n, 1.0),
+        std::vector<double>(m, 0.0),
+        std::vector<double>(n, 0.0),
+        std::vector<double>(n, 1.0e20)
+    };
+
+    lp_solver::model::SolverState state;
+    state.basic_indices.resize(m);
+    state.x_basic.assign(m, 1.0);
+    for (int i = 0; i < m; ++i) {
+        state.basic_indices[i] = i;
+    }
+
+    lp_solver::simplex::SolverConfig cfg;
+    cfg.use_dual_steepest_edge = true;
+    cfg.use_presolve = false;
+    cfg.enable_big_m_phase_one = false;
+    cfg.refactor_frequency = 10;
+
+    auto factor = lp_solver::linalg::makeFactor(lp_solver::linalg::FactorBackend::Eigen);
+    lp_solver::simplex::DualSimplex solver(std::move(factor), nullptr, nullptr);
+    const auto status = solver.solve(prob, state, cfg);
+    expect(status == lp_solver::simplex::DualSimplex::Status::Optimal, "sparse DSE solve should be optimal");
+    expect(state.dse_weights.size() == static_cast<size_t>(m), "DSE weights sized to basis rows");
+}
+
+void testPresolveSparseStructure() {
+    constexpr int m = 40;
+    constexpr int n = 500;
+    lp_solver::util::PackedMatrix::Builder builder(m, n);
+    builder.appendColumn(std::vector<int>{0}, std::vector<double>{1.0});
+    for (int j = 1; j < n; ++j) {
+        const int row = 1 + ((j - 1) % (m - 1));
+        builder.appendColumn(std::vector<int>{row}, std::vector<double>{1.0});
+    }
+    lp_solver::model::ProblemData prob{
+        std::move(builder).build(),
+        std::vector<double>(n, 0.0),
+        std::vector<double>(m, 0.0),
+        std::vector<double>(n, 0.0),
+        std::vector<double>(n, 1.0e30)
+    };
+    prob.b[0] = 7.0;
+    prob.c[0] = 2.0;
+
+    lp_solver::presolve::Presolver presolver;
+    const auto reduced = presolver.run(prob);
+    expect(reduced.status == lp_solver::presolve::Presolver::Status::Reduced, "sparse presolve should reduce");
+    expect(prob.A.numNonZeros() == n, "fixture stays sparse in CSC");
+    expect(reduced.reduced_problem.A.numNonZeros() <= n, "reduced nnz does not exceed original");
+    expect(reduced.reduced_problem.A.numNonZeros() < m * n, "avoid dense m-by-n fill");
+    expect(std::abs(reduced.fixed_values[0] - 7.0) < 1e-10, "singleton primal fix");
+
+    const std::vector<double> core(
+        static_cast<size_t>(reduced.reduced_problem.numCols()),
+        1.0
+    );
+    const auto full_x = presolver.postsolvePrimal(reduced, core);
+    expect(static_cast<int>(full_x.size()) == prob.numCols(), "sparse postsolve primal size");
+    expect(std::abs(full_x[0] - 7.0) < 1e-10, "sparse postsolve restores singleton");
+}
+
 }  // namespace
 
 int main() {
     try {
         testEtaLengthAndRefactorReset();
         testBigMEntryPathRuns();
+        testPresolveAndPostsolveDual();
+        testPresolveSolvePostsolveDualEndToEnd();
         testPresolveAndPostsolve();
+        testPresolveSparseStructure();
+        testDefaultFactorBackendSelection();
+        testDualSimplexWithDefaultFactor();
         testSparseFactorBackendsAgreeOnSolve();
         testEigenFactorRandomResiduals();
+        testEtaFileSparseStorageAndApply();
         testEigenFactorEtaUpdateMath();
+        testGoldfarbReidDseHypersparseMatchesDense();
+        testDseSolveOnSparseModel();
     } catch (const std::exception& ex) {
         std::cerr << ex.what() << '\n';
         return 1;
