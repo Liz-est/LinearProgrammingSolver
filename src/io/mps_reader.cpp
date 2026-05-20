@@ -128,6 +128,40 @@ bool addColumnEntry(
     return true;
 }
 
+bool knownRow(const RawLpModel& model, const std::string& row_name) {
+    if (!model.objective_row.empty() && row_name == model.objective_row) {
+        return true;
+    }
+    return model.constraint_index.find(normalizeName(row_name)) != model.constraint_index.end();
+}
+
+bool parseColumnsFreeLine(const std::string& line, int line_no, RawLpModel& model, MpsReadResult& result) {
+    const std::vector<std::string> toks = splitWs(line);
+    if (toks.empty()) {
+        return true;
+    }
+    if (isMarkerLine(toks)) {
+        return true;
+    }
+    if (toks.size() < 3) {
+        result.error = "Malformed COLUMNS line " + std::to_string(line_no);
+        return false;
+    }
+    const int var_idx = ensureVariable(model, toks[0]);
+    for (size_t i = 1; i + 1 < toks.size(); i += 2) {
+        const std::string& row_name = toks[i];
+        double val = 0.0;
+        if (!parseDouble(toks[i + 1], val)) {
+            result.error = "Invalid numeric value in COLUMNS at line " + std::to_string(line_no);
+            return false;
+        }
+        if (!addColumnEntry(model, var_idx, row_name, val, line_no, result)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 bool parseColumnsFixedLine(const std::string& line, int line_no, RawLpModel& model, MpsReadResult& result) {
     const std::string var_name = mpsField(line, 5, 8);
     if (var_name.empty()) {
@@ -136,6 +170,18 @@ bool parseColumnsFixedLine(const std::string& line, int line_no, RawLpModel& mod
     if (isMarkerLine(splitWs(trim(line)))) {
         return true;
     }
+
+    // Decide between fixed and free format by validating the first row token
+    // against the parsed constraints: if the fixed-column row name is unknown
+    // but a whitespace token matches, use free-format parsing.
+    const std::string fixed_row = mpsField(line, 15, 8);
+    if (!fixed_row.empty() && !knownRow(model, fixed_row)) {
+        const std::vector<std::string> toks = splitWs(line);
+        if (toks.size() >= 3 && knownRow(model, toks[1])) {
+            return parseColumnsFreeLine(line, line_no, model, result);
+        }
+    }
+
     const int var_idx = ensureVariable(model, var_name);
     const struct {
         int row_col;
@@ -159,6 +205,42 @@ bool parseColumnsFixedLine(const std::string& line, int line_no, RawLpModel& mod
     return true;
 }
 
+bool parseRhsFreeLine(
+    const std::string& line,
+    int line_no,
+    RawLpModel& model,
+    std::string& selected_rhs_name,
+    MpsReadResult& result
+) {
+    const std::vector<std::string> toks = splitWs(line);
+    if (toks.empty()) {
+        return true;
+    }
+    // Token 0 may be an RHS name (no matching row) or a row name (matches a row).
+    size_t pair_start = 0;
+    if (!knownRow(model, toks[0])) {
+        if (selected_rhs_name.empty()) {
+            selected_rhs_name = toks[0];
+        }
+        if (toks[0] != selected_rhs_name) {
+            return true;
+        }
+        pair_start = 1;
+    }
+    for (size_t i = pair_start; i + 1 < toks.size(); i += 2) {
+        double val = 0.0;
+        if (!parseDouble(toks[i + 1], val)) {
+            result.error = "Invalid numeric value in RHS at line " + std::to_string(line_no);
+            return false;
+        }
+        const auto row_it = model.constraint_index.find(normalizeName(toks[i]));
+        if (row_it != model.constraint_index.end()) {
+            model.constraints[static_cast<size_t>(row_it->second)].rhs = val;
+        }
+    }
+    return true;
+}
+
 bool parseRhsFixedLine(
     const std::string& line,
     int line_no,
@@ -174,7 +256,19 @@ bool parseRhsFixedLine(
         }
     }
 
-    std::string rhs_name = mpsField(line, 5, 8);
+    const std::string fixed_first = mpsField(line, 5, 8);
+    const std::string fixed_row = mpsField(line, 15, 8);
+    if (!fixed_row.empty() && !knownRow(model, fixed_row)) {
+        const std::vector<std::string> toks = splitWs(line);
+        const bool free_ok =
+            (toks.size() >= 2 && knownRow(model, toks[0])) ||
+            (toks.size() >= 3 && knownRow(model, toks[1]));
+        if (free_ok) {
+            return parseRhsFreeLine(line, line_no, model, selected_rhs_name, result);
+        }
+    }
+
+    std::string rhs_name = fixed_first;
     int pair_start_row = 15;
     if (!rhs_name.empty() && model.constraint_index.find(rhs_name) != model.constraint_index.end()) {
         pair_start_row = 5;
@@ -211,6 +305,43 @@ bool parseRhsFixedLine(
     return true;
 }
 
+bool parseRangesFreeLine(
+    const std::string& line,
+    int line_no,
+    RawLpModel& model,
+    std::string& selected_ranges_name,
+    MpsReadResult& result
+) {
+    const std::vector<std::string> toks = splitWs(line);
+    if (toks.empty()) {
+        return true;
+    }
+    size_t pair_start = 0;
+    if (!knownRow(model, toks[0])) {
+        if (selected_ranges_name.empty()) {
+            selected_ranges_name = toks[0];
+        }
+        if (toks[0] != selected_ranges_name) {
+            return true;
+        }
+        pair_start = 1;
+    }
+    for (size_t i = pair_start; i + 1 < toks.size(); i += 2) {
+        double val = 0.0;
+        if (!parseDouble(toks[i + 1], val)) {
+            result.error = "Invalid numeric value in RANGES at line " + std::to_string(line_no);
+            return false;
+        }
+        const auto row_it = model.constraint_index.find(normalizeName(toks[i]));
+        if (row_it != model.constraint_index.end()) {
+            RawConstraint& row = model.constraints[static_cast<size_t>(row_it->second)];
+            row.has_range = true;
+            row.range = val;
+        }
+    }
+    return true;
+}
+
 bool parseRangesFixedLine(
     const std::string& line,
     int line_no,
@@ -218,6 +349,17 @@ bool parseRangesFixedLine(
     std::string& selected_ranges_name,
     MpsReadResult& result
 ) {
+    const std::string fixed_row = mpsField(line, 15, 8);
+    if (!fixed_row.empty() && !knownRow(model, fixed_row)) {
+        const std::vector<std::string> toks = splitWs(line);
+        const bool free_ok =
+            (toks.size() >= 2 && knownRow(model, toks[0])) ||
+            (toks.size() >= 3 && knownRow(model, toks[1]));
+        if (free_ok) {
+            return parseRangesFreeLine(line, line_no, model, selected_ranges_name, result);
+        }
+    }
+
     std::string ranges_name = mpsField(line, 5, 8);
     int pair_start_row = 15;
     if (!ranges_name.empty() && model.constraint_index.find(ranges_name) != model.constraint_index.end()) {
@@ -282,6 +424,47 @@ bool applyBoundType(const std::string& bound_type, RawVariableBounds& b, bool ha
     return true;
 }
 
+bool isBoundType(const std::string& s) {
+    static const char* const kTypes[] = {"LO", "UP", "FX", "FR", "MI", "PL", "BV", "LI", "UI"};
+    for (const char* t : kTypes) {
+        if (s == t) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool parseBoundsFreeLine(
+    const std::string& line,
+    int line_no,
+    RawLpModel& model,
+    std::string& selected_bounds_name,
+    MpsReadResult& result
+) {
+    const std::vector<std::string> toks = splitWs(line);
+    if (toks.size() < 3) {
+        return true;
+    }
+    const std::string bound_type = toUpper(toks[0]);
+    const std::string& bounds_name = toks[1];
+    const std::string& var_name = toks[2];
+    if (selected_bounds_name.empty()) {
+        selected_bounds_name = bounds_name;
+    }
+    if (bounds_name != selected_bounds_name) {
+        return true;
+    }
+    const int var_idx = ensureVariable(model, var_name);
+    RawVariableBounds& b = model.bounds[static_cast<size_t>(var_idx)];
+    const bool has_value = toks.size() >= 4;
+    double value = 0.0;
+    if (has_value && !parseDouble(toks[3], value)) {
+        result.error = "Invalid numeric value in BOUNDS at line " + std::to_string(line_no);
+        return false;
+    }
+    return applyBoundType(bound_type, b, has_value, value, line_no, result);
+}
+
 bool parseBoundsFixedLine(
     const std::string& line,
     int line_no,
@@ -289,9 +472,25 @@ bool parseBoundsFixedLine(
     std::string& selected_bounds_name,
     MpsReadResult& result
 ) {
-    const std::string bound_type = toUpper(mpsField(line, 2, 2));
-    const std::string bounds_name = mpsField(line, 5, 8);
-    const std::string var_name = mpsField(line, 15, 8);
+    const std::string fixed_type = toUpper(mpsField(line, 2, 2));
+    const std::string fixed_name = mpsField(line, 5, 8);
+    const std::string fixed_var = mpsField(line, 15, 8);
+
+    // Fall back to free-format if the fixed columns do not produce a known
+    // bound type or contain a variable name that does not exist.
+    const bool fixed_valid_type = isBoundType(fixed_type);
+    const bool fixed_valid_var = !fixed_var.empty() &&
+        model.variable_index.find(fixed_var) != model.variable_index.end();
+    if (!fixed_valid_type || (!fixed_valid_var && !fixed_var.empty())) {
+        const std::vector<std::string> toks = splitWs(line);
+        if (toks.size() >= 3 && isBoundType(toUpper(toks[0]))) {
+            return parseBoundsFreeLine(line, line_no, model, selected_bounds_name, result);
+        }
+    }
+
+    const std::string bound_type = fixed_type;
+    const std::string bounds_name = fixed_name;
+    const std::string var_name = fixed_var;
     if (bound_type.empty() || bounds_name.empty() || var_name.empty()) {
         return true;
     }

@@ -167,6 +167,42 @@ double minReducedCost(const model::SolverState& state) {
     return min_rc;
 }
 
+int choosePrimalEnteringColumn(const model::SolverState& state, int skip_col) {
+    int entering = -1;
+    double best_rc = 0.0;
+    for (size_t k = 0; k < state.nonbasic_indices.size(); ++k) {
+        const int col = state.nonbasic_indices[k];
+        if (col == skip_col || k >= state.reduced_costs.size()) {
+            continue;
+        }
+        if (state.reduced_costs[k] < best_rc) {
+            best_rc = state.reduced_costs[k];
+            entering = col;
+        }
+    }
+    return entering;
+}
+
+int choosePrimalLeavingRow(
+    const model::SolverState& state,
+    const util::IndexedVector& aq,
+    double tol
+) {
+    int leaving = -1;
+    double min_ratio = std::numeric_limits<double>::infinity();
+    for (int i = 0; i < static_cast<int>(state.x_basic.size()); ++i) {
+        const double alpha = aq[i];
+        if (alpha > tol) {
+            const double ratio = state.x_basic[i] / alpha;
+            if (ratio < min_ratio - 1e-12) {
+                min_ratio = ratio;
+                leaving = i;
+            }
+        }
+    }
+    return leaving;
+}
+
 bool mapInitialBasisThroughPresolve(
     const std::vector<int>& caller_basis,
     const presolve::Presolver::ReductionResult& reduction,
@@ -343,10 +379,82 @@ DualSimplex::Status DualSimplex::solve(
             leaving_row = chooseMostInfeasibleRow(state, cfg.primal_feasibility_tol);
         }
         if (leaving_row < 0) {
+            // Primal feasible; verify dual feasibility before declaring optimal.
+            if (minReducedCost(state) >= -cfg.dual_feasibility_tol) {
+                state.objective = computeObjective(work_prob, state) + objective_offset;
+                if (observer_ != nullptr) {
+                    observer_->onIterationEnd(state);
+                    observer_->onTermination(state, "Optimal: primal and dual feasible");
+                }
+                break;
+            }
+
+            // Dual infeasible: run primal pivots until dual becomes feasible
+            // or primal becomes infeasible (back to dual simplex) or unbounded.
+            const int m_rows = work_prob.numRows();
+            bool primal_progress = false;
+            while (state.iteration < cfg.max_iterations &&
+                   minReducedCost(state) < -cfg.dual_feasibility_tol) {
+                const int entering_col = choosePrimalEnteringColumn(state, artificial_column_index);
+                if (entering_col < 0) {
+                    break;
+                }
+
+                util::IndexedVector aq = work_prob.A.column(entering_col);
+                ftran(aq);
+                const int leave = choosePrimalLeavingRow(state, aq, cfg.primal_feasibility_tol);
+                if (leave < 0) {
+                    if (observer_ != nullptr) {
+                        observer_->onIterationEnd(state);
+                        observer_->onTermination(state, "Primal unbounded during dual recovery");
+                    }
+                    return Status::Unbounded;
+                }
+
+                if (std::abs(aq[leave]) <= kTiny) {
+                    break;
+                }
+
+                util::IndexedVector rho(m_rows);
+                rho.set(leave, 1.0);
+                btran(rho);
+
+                if (observer_ != nullptr) {
+                    observer_->onPivot(leave, entering_col, std::abs(state.reduced_costs.empty() ? 0.0 : state.reduced_costs.front()));
+                }
+
+                pivot(leave, entering_col, aq, work_prob, state);
+                updateDuals(work_prob, leave, entering_col, rho, aq, state);
+                primal_progress = true;
+
+                if (cfg.refactor_frequency > 0 && factor_->etaFileLength() >= cfg.refactor_frequency) {
+                    if (!factor_->factorize(buildBasisMatrix(work_prob, state))) {
+                        if (observer_ != nullptr) {
+                            observer_->onTermination(state, "Periodic refactorization failed");
+                        }
+                        return Status::Infeasible;
+                    }
+                    initializeDseWeights(state);
+                    computePrimalBasic(work_prob, state);
+                    computeDualAndReducedCosts(work_prob, state);
+                }
+
+                if (observer_ != nullptr) {
+                    observer_->onIterationEnd(state);
+                }
+                ++state.iteration;
+            }
+
+            if (primal_progress) {
+                // Resume outer loop: dual simplex picks up from new basis.
+                continue;
+            }
+
+            // Could not improve; accept current basis as best found.
             state.objective = computeObjective(work_prob, state) + objective_offset;
             if (observer_ != nullptr) {
                 observer_->onIterationEnd(state);
-                observer_->onTermination(state, "Primal feasible basis reached");
+                observer_->onTermination(state, "Primal feasible; no further primal progress");
             }
             break;
         }
@@ -360,13 +468,54 @@ DualSimplex::Status DualSimplex::solve(
         btran(rho);
 
         util::IndexedVector pivot_row(n_cols);
-        const int entering_col = chuzc(work_prob, state, leaving_row, rho, cfg, pivot_row);
+        int entering_col = chuzc(work_prob, state, leaving_row, rho, cfg, pivot_row);
         if (entering_col < 0) {
-            if (observer_ != nullptr) {
-                observer_->onIterationEnd(state);
-                observer_->onTermination(state, "No entering column satisfies ratio test");
+            // Refactorize and retry to clear accumulated numerical error.
+            bool factor_ok = true;
+            if (factor_->etaFileLength() > 0) {
+                if (factor_->factorize(buildBasisMatrix(work_prob, state))) {
+                    initializeDseWeights(state);
+                    computePrimalBasic(work_prob, state);
+                    computeDualAndReducedCosts(work_prob, state);
+                    rho.clear();
+                    rho.set(leaving_row, 1.0);
+                    btran(rho);
+                    pivot_row.clear();
+                    entering_col = chuzc(work_prob, state, leaving_row, rho, cfg, pivot_row);
+                } else {
+                    factor_ok = false;
+                }
             }
-            return Status::Infeasible;
+            // If still no entering column, scan other infeasible rows.
+            if (entering_col < 0 && factor_ok) {
+                for (int alt = 0; alt < static_cast<int>(state.x_basic.size()) && entering_col < 0; ++alt) {
+                    if (alt == leaving_row) {
+                        continue;
+                    }
+                    if (state.x_basic[alt] >= -cfg.primal_feasibility_tol) {
+                        continue;
+                    }
+                    rho.clear();
+                    rho.set(alt, 1.0);
+                    btran(rho);
+                    pivot_row.clear();
+                    const int candidate = chuzc(work_prob, state, alt, rho, cfg, pivot_row);
+                    if (candidate >= 0) {
+                        leaving_row = alt;
+                        entering_col = candidate;
+                        break;
+                    }
+                }
+            }
+            if (entering_col < 0) {
+                if (observer_ != nullptr) {
+                    observer_->onIterationEnd(state);
+                    observer_->onTermination(state, factor_ok
+                        ? "No entering column satisfies ratio test"
+                        : "Refactorization failed during ratio test recovery");
+                }
+                return Status::Infeasible;
+            }
         }
 
         util::IndexedVector aq = work_prob.A.column(entering_col);

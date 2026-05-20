@@ -81,7 +81,8 @@ int main() {
     try {
         testReadAndStandardize();
         testRejectGzPath();
-    } catch (const std::exception&) {
+    } catch (const std::exception& ex) {
+        std::fprintf(stderr, "parser test failure: %s\n", ex.what());
         return 1;
     }
     return 0;

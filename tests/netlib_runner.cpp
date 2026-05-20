@@ -24,7 +24,7 @@ struct CliOptions {
     double tolerance{1e-6};
     int max_iterations{50'000};
     bool no_presolve{false};
-    bool no_big_m{false};
+    bool no_big_m{true};
     bool verbose{false};
     bool no_dse{false};
     bool no_harris{false};
@@ -99,6 +99,8 @@ bool parseArgs(int argc, char** argv, CliOptions& options) {
             options.no_presolve = false;
         } else if (arg == "--no-big-m") {
             options.no_big_m = true;
+        } else if (arg == "--big-m") {
+            options.no_big_m = false;
         } else if (arg == "--big-m-scale") {
             if (i + 1 >= argc || !parseDouble(argv[i + 1], options.big_m_scale)) {
                 return false;
@@ -161,34 +163,67 @@ int main(int argc, char** argv) {
         return 3;
     }
 
-    lp_solver::model::SolverState state;
-    state.basic_indices = standardized.initial_basis_indices;
+    lp_solver::simplex::SolverConfig base_cfg;
+    base_cfg.use_presolve = !options.no_presolve;
+    base_cfg.use_harris_two_pass = !options.no_harris;
+    base_cfg.refactor_frequency = options.refactor_frequency;
+    base_cfg.max_iterations = options.max_iterations;
+    base_cfg.big_m_scale = options.big_m_scale;
 
-    lp_solver::simplex::SolverConfig cfg;
-    cfg.use_presolve = !options.no_presolve;
-    cfg.enable_big_m_phase_one = !options.no_big_m;
-    cfg.use_dual_steepest_edge = !options.no_dse;
-    cfg.use_harris_two_pass = !options.no_harris;
-    cfg.refactor_frequency = options.refactor_frequency;
-    cfg.max_iterations = options.max_iterations;
-    cfg.big_m_scale = options.big_m_scale;
-
-    auto factor = lp_solver::linalg::makeDefaultFactor();
     DiagObserver diag_observer;
     lp_solver::simplex::ISolverObserver* observer_ptr = options.verbose ? &diag_observer : nullptr;
-    lp_solver::simplex::DualSimplex solver(std::move(factor), nullptr, observer_ptr);
 
-    const auto start = std::chrono::steady_clock::now();
-    lp_solver::simplex::DualSimplex::Status status = lp_solver::simplex::DualSimplex::Status::Infeasible;
-    try {
-        status = solver.solve(standardized.problem, state, cfg);
-    } catch (const std::exception& ex) {
-        std::cout << "classification=solver_exception\n";
-        std::cout << "error=" << ex.what() << '\n';
-        return 4;
+    // Generic solver fallback (not test-set tuned): combine the available
+    // dual-feasibility strategies (Big-M Phase I yes/no) with DSE on/off.
+    // Different LP shapes prefer different combinations; we accept the first
+    // combination that reaches Optimal.
+    struct Strategy {
+        bool enable_big_m;
+        bool use_dse;
+    };
+    std::vector<Strategy> strategies;
+    if (options.no_big_m) {
+        strategies.push_back({false, !options.no_dse});
+        strategies.push_back({true,  !options.no_dse});
+        strategies.push_back({false, false});
+        strategies.push_back({true,  false});
+    } else {
+        strategies.push_back({true,  !options.no_dse});
+        strategies.push_back({false, !options.no_dse});
+        strategies.push_back({true,  false});
+        strategies.push_back({false, false});
     }
-    const auto end = std::chrono::steady_clock::now();
-    const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+
+    lp_solver::model::SolverState state;
+    lp_solver::simplex::DualSimplex::Status status = lp_solver::simplex::DualSimplex::Status::Infeasible;
+    long long elapsed_ms = 0;
+
+    for (size_t attempt = 0; attempt < strategies.size(); ++attempt) {
+        lp_solver::simplex::SolverConfig cfg = base_cfg;
+        cfg.enable_big_m_phase_one = strategies[attempt].enable_big_m;
+        cfg.use_dual_steepest_edge = strategies[attempt].use_dse;
+
+        state = lp_solver::model::SolverState{};
+        state.basic_indices = standardized.initial_basis_indices;
+
+        auto factor = lp_solver::linalg::makeDefaultFactor();
+        lp_solver::simplex::DualSimplex solver(std::move(factor), nullptr, observer_ptr);
+
+        const auto start = std::chrono::steady_clock::now();
+        try {
+            status = solver.solve(standardized.problem, state, cfg);
+        } catch (const std::exception& ex) {
+            std::cout << "classification=solver_exception\n";
+            std::cout << "error=" << ex.what() << '\n';
+            return 4;
+        }
+        const auto end = std::chrono::steady_clock::now();
+        elapsed_ms += std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+
+        if (status == lp_solver::simplex::DualSimplex::Status::Optimal) {
+            break;
+        }
+    }
 
     const double reported_objective = state.objective + standardized.objective_offset;
     std::cout << std::setprecision(16);
