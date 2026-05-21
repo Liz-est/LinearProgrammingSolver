@@ -1,4 +1,4 @@
-# Linear Programming Solver
+﻿# Linear Programming Solver
 
 **Language** | [中文版本](README_zh.md)
 
@@ -41,6 +41,7 @@ LinearProgramingSolver/
 │   └── netlib_baseline.csv          # reference objectives / tolerances (starter set)
 ├── netlib/                          # local Netlib `.mps` data (gitignored; see below)
 ├── scripts/
+│   ├── run-test-plan.ps1            # configure, build, and run CTest
 │   └── run-netlib.ps1               # batch runner → CSV summary
 ├── docs/
 │   └── netlib_format_notes.md       # supported MPS subset + standardization notes
@@ -102,7 +103,7 @@ ctest --test-dir build -C Debug --output-on-failure
 Windows helper:
 
 ```powershell
-.\run-test-plan.ps1 -Config Debug -BuildDir build
+.\scripts\run-test-plan.ps1 -Config Debug -BuildDir build
 ```
 
 ## Netlib Benchmark Workflow
@@ -122,6 +123,7 @@ The repo ships a Netlib test path: read `.mps` files, standardize to `Ax=b, x>=0
 | `tests/netlib_runner.cpp`                      | CLI executable source (`lp_solver_netlib_runner`)                                           |
 | `tests/netlib_parser_test.cpp`                 | CTest: parse + standardize smoke checks                                                     |
 | `tests/netlib_baseline.csv`                    | Local reference objectives / tolerances                                                     |
+| `scripts/run-test-plan.ps1`                    | Configure, build, and run the CTest suite                                                   |
 | `scripts/run-netlib.ps1`                       | Batch over a data directory; writes a results CSV                                           |
 | `docs/netlib_format_notes.md`                  | Supported MPS sections and conversion rules                                                 |
 | `netlib/`                                      | Place decompressed `.mps` files here (directory is gitignored)                              |

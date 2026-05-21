@@ -40,6 +40,7 @@ LinearProgramingSolver/
 │   └── netlib_baseline.csv          # 参考目标值 / 容差（起步集）
 ├── netlib/                          # 本地 Netlib `.mps` 数据（已 gitignore）
 ├── scripts/
+│   ├── run-test-plan.ps1            # 配置、构建并运行 CTest
 │   └── run-netlib.ps1               # 批量运行并输出 CSV
 ├── docs/
 │   └── netlib_format_notes.md       # 支持的 MPS 子集与转换说明
@@ -101,7 +102,7 @@ ctest --test-dir build -C Debug --output-on-failure
 Windows：
 
 ```powershell
-.\run-test-plan.ps1 -Config Debug -BuildDir build
+.\scripts\run-test-plan.ps1 -Config Debug -BuildDir build
 ```
 
 ## Netlib 测试流程
@@ -121,6 +122,7 @@ Windows：
 | `tests/netlib_runner.cpp`                      | CLI 可执行文件源码（`lp_solver_netlib_runner`）                        |
 | `tests/netlib_parser_test.cpp`                 | CTest：解析 + 标准化 smoke 检查                                       |
 | `tests/netlib_baseline.csv`                    | 本地参考目标值与容差                                                    |
+| `scripts/run-test-plan.ps1`                    | 配置、构建并运行 CTest 测试套件                                           |
 | `scripts/run-netlib.ps1`                       | 批量遍历数据目录并写 CSV 汇总                                             |
 | `docs/netlib_format_notes.md`                  | 支持的 MPS 区段与标准化规则                                              |
 | `netlib/`                                      | 存放解压后的 `.mps`（目录已 gitignore）                                  |

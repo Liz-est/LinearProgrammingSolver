@@ -6,6 +6,15 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+$ScriptDir = Split-Path -Parent $PSCommandPath
+$RepoRoot = Resolve-Path (Join-Path $ScriptDir "..")
+
+if ([System.IO.Path]::IsPathRooted($BuildDir)) {
+    $ResolvedBuildDir = $BuildDir
+} else {
+    $ResolvedBuildDir = Join-Path $RepoRoot $BuildDir
+}
+
 function Invoke-Step {
     param(
         [Parameter(Mandatory = $true)][string]$Name,
@@ -28,15 +37,15 @@ if (-not (Get-Command ctest -ErrorAction SilentlyContinue)) {
 }
 
 Invoke-Step -Name "Configure ($Config)" -Action {
-    cmake -S . -B $BuildDir -DCMAKE_BUILD_TYPE=$Config
+    cmake -S $RepoRoot -B $ResolvedBuildDir "-DCMAKE_BUILD_TYPE=${Config}"
 }
 
 Invoke-Step -Name "Build ($Config)" -Action {
-    cmake --build $BuildDir --config $Config
+    cmake --build $ResolvedBuildDir --config $Config
 }
 
 Invoke-Step -Name "Run Tests ($Config)" -Action {
-    ctest --test-dir $BuildDir -C $Config --output-on-failure
+    ctest --test-dir $ResolvedBuildDir -C $Config --output-on-failure
 }
 
 Write-Host ""

@@ -26,5 +26,6 @@ cmake-build-*/
 
 # test files
 *.csv
+!tests/netlib_baseline.csv
 netlib/
-Testing/
+/Testing/
