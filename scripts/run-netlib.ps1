@@ -24,7 +24,7 @@ function Resolve-RunnerPath {
     throw "Cannot find lp_solver_netlib_runner.exe under '$BuildDir'. Build target 'lp_solver_netlib_runner' first."
 }
 
-function Parse-KeyValueOutput {
+function ConvertFrom-KeyValueOutput {
     param([string[]]$Lines)
     $map = @{}
     foreach ($line in $Lines) {
@@ -120,18 +120,18 @@ if ($mpsFiles.Length -eq 0) {
 
 foreach ($file in $mpsFiles) {
     $problem = [System.IO.Path]::GetFileNameWithoutExtension($file.Name).ToUpperInvariant()
-    $args = @($file.FullName)
+    $runnerArgs = @($file.FullName)
 
     if ($baseline.ContainsKey($problem)) {
         $b = $baseline[$problem]
-        $args += @("--ref", "$($b.objective)", "--tol", "$($b.tolerance)")
+        $runnerArgs += @("--ref", "$($b.objective)", "--tol", "$($b.tolerance)")
     }
 
     Write-Host "Running $problem ..."
-    $output = & $runner @args 2>&1
+    $output = & $runner @runnerArgs 2>&1
     $exitCode = $LASTEXITCODE
 
-    $kv = Parse-KeyValueOutput -Lines $output
+    $kv = ConvertFrom-KeyValueOutput -Lines $output
     $results += [pscustomobject]@{
         problem         = $problem
         file            = $file.FullName
