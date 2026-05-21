@@ -15,6 +15,7 @@ cmake-build-*/
 *.swo
 *~
 .clangd
+.cursor/
 
 # macOS
 .DS_Store
@@ -24,5 +25,6 @@ cmake-build-*/
 *.log
 
 # test files
-.csv
+*.csv
 netlib/
+Testing/
