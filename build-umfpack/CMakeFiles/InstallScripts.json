@@ -1,7 +1,0 @@
-{
-	"InstallScripts" : 
-	[
-		"E:/LinearProgramingSolver/build-umfpack/cmake_install.cmake"
-	],
-	"Parallel" : false
-}
