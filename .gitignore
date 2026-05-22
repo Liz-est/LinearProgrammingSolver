@@ -29,3 +29,4 @@ cmake-build-*/
 !tests/netlib_baseline.csv
 netlib/
 /Testing/
+LinearProgrammingSolver-submission.zip

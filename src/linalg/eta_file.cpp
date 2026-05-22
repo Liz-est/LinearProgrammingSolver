@@ -6,26 +6,23 @@ namespace lp_solver::linalg {
 namespace {
 constexpr double kSingularTol = 1e-12;
 constexpr double kZeroTol = 1e-14;
-
-double pivotValueOrDefault(const util::IndexedVector& ftran_col, int pivot_row) {
-    double dp = ftran_col[pivot_row];
-    if (std::abs(dp) <= kSingularTol) {
-        dp = 1.0;
-    }
-    return dp;
-}
 }  // namespace
 
 void EtaFile::clear() { updates_.clear(); }
 
-void EtaFile::append(int pivot_row, const util::IndexedVector& ftran_col) {
+bool EtaFile::append(int pivot_row, const util::IndexedVector& ftran_col) {
     if (pivot_row < 0 || pivot_row >= ftran_col.capacity()) {
-        return;
+        return false;
+    }
+
+    const double pivot_value = ftran_col[pivot_row];
+    if (std::abs(pivot_value) <= kSingularTol) {
+        return false;
     }
 
     Update eta;
     eta.pivot_row = pivot_row;
-    eta.pivot_value = pivotValueOrDefault(ftran_col, pivot_row);
+    eta.pivot_value = pivot_value;
 
     const auto& nz = ftran_col.nonZeroIndices();
     eta.indices.reserve(nz.size() + 1);
@@ -49,6 +46,7 @@ void EtaFile::append(int pivot_row, const util::IndexedVector& ftran_col) {
     }
 
     updates_.push_back(std::move(eta));
+    return true;
 }
 
 void EtaFile::applyForward(util::IndexedVector& v) const {

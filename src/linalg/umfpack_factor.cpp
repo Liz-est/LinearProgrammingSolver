@@ -218,8 +218,8 @@ void UmfpackFactor::btran(util::IndexedVector& rhs) const {
     }
 }
 
-void UmfpackFactor::updateEta(int pivot_row, const util::IndexedVector& ftran_col) {
-    eta_file_.append(pivot_row, ftran_col);
+bool UmfpackFactor::updateEta(int pivot_row, const util::IndexedVector& ftran_col) {
+    return eta_file_.append(pivot_row, ftran_col);
 }
 
 int UmfpackFactor::etaFileLength() const { return eta_file_.length(); }

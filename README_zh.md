@@ -2,7 +2,7 @@
 
 **语言** | [English](README.md)
 
-用于 **标准型线性规划**（在 Ax=b,\ x\ge 0 下最小化 c^\top x）的 **C++20** 库：核心是 **修正对偶单纯形**，矩阵以 **CSC** 稀疏格式存放，可选 **预处理/后处理**，基矩阵通过可插拔的 `**IBasisFactor`** 维护。
+用于 **标准型线性规划**（在 Ax=b,\ x\ge 0 下最小化 c^\top x）的 **C++20** 库：核心是 **修正对偶单纯形**，矩阵以 **CSC** 稀疏格式存放，可选 **预处理/后处理**，基矩阵通过可插拔的 `IBasisFactor` 维护。
 
 ## 特性
 
@@ -12,9 +12,9 @@
 - **基维护**：对 B 做稀疏 LU，迭代间用 **稀疏 ETA 文件**（乘积形式逆）修正；`etaFileLength()` 达到 `refactor_frequency` 时重构 LU
 - **超稀疏三角解**：Gilbert–Peierls 可达性 + 在提取的 CSC L/U 上前/回代；右端稀疏时工作量约为 O(\mathrm{nnz})
 - **定价**：可选 **对偶最陡边（DSE）** 及仅在 FTRAN/BTRAN 非零元上更新的 **Goldfarb–Reid** 权重递推；进基采用 **Harris 两阶段**比率检验
-- **预处理/后处理**：按列稀疏扫描化简（不构造稠密 A）；LIFO 栈记录；`**postsolvePrimal`** 与 `**postsolveDual`**（在化简栈上恢复对偶）
+- **预处理/后处理**：按列稀疏扫描化简（不构造稠密 A）；LIFO 栈记录；`postsolvePrimal` 与 `postsolveDual`（在化简栈上恢复对偶）
 - **稀疏基础结构**：`PackedMatrix`（CSC）、`IndexedVector`（跟踪非零元）；`multiply` / `transposeMultiply`
-- **因子后端**：`EigenFactor`（Eigen SparseLU 提取 + GP 解法）；`UmfpackFactor`（链接 UMFPACK 时使用，否则与 Eigen 相同稀疏路径）；`**makeDefaultFactor()`** 在可用时优先 UMFPACK
+- **因子后端**：`EigenFactor`（Eigen SparseLU 提取 + GP 解法）；`UmfpackFactor`（链接 UMFPACK 时使用，否则与 Eigen 相同稀疏路径）；`makeDefaultFactor()` 在可用时优先 UMFPACK
 
 ## 项目结构
 
@@ -271,8 +271,8 @@ if (status == lp_solver::simplex::DualSimplex::Status::Optimal) {
 ## 实现说明
 
 - **超稀疏路径**：三角解（Gilbert–Peierls）、ETA 应用、DSE 的 Goldfarb–Reid 更新在可能处仅遍历 `IndexedVector::nonZeroIndices()`，避免对全维度的 O(n) 扫描。
-- `**EigenFactor`**：Eigen `SparseLU` 因子提取 + GP 风格 `ftran`/`btran`；提取校验失败时引擎内部可回退稠密路径。
-- `**UmfpackFactor`**：在 `LP_SOLVER_HAVE_UMFPACK` 下使用 UMFPACK 分解与提取；否则与 `EigenFactor` 相同的稀疏引擎路径。
+- `EigenFactor`：Eigen `SparseLU` 因子提取 + GP 风格 `ftran`/`btran`；提取校验失败时引擎内部可回退稠密路径。
+- `UmfpackFactor`**：在 `LP_SOLVER_HAVE_UMFPACK` 下使用 UMFPACK 分解与提取；否则与 `EigenFactor` 相同的稀疏引擎路径。
 - **对偶 Big-M**：起始检验数对偶不可行时，工作问题临时增加一行界约束和一列人工变量；强制转轴一次后继续 Phase II。若存在人工列，返回的 `**primal_solution` 会去掉该列**。
 - **最优性检查**：找不到离基行（原始可行）时，先检查对偶可行性（`minReducedCost`）；若对偶仍不可行，则在当前基上执行原始单纯形转轴，直到对偶可行或无法继续改进。
 - `**chuzc` 恢复**：进基列选择失败时先重因子化并重试；仍失败则扫描其他原始不可行行；最后才报 infeasible。

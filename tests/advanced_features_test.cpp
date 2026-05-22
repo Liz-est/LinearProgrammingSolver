@@ -112,7 +112,7 @@ void testEtaLengthAndRefactorReset() {
     lp_solver::util::IndexedVector d(2);
     d.set(0, 0.5);
     d.set(1, 1.0);
-    factor.updateEta(1, d);
+    expect(factor.updateEta(1, d), "eta update should be accepted");
     expect(factor.etaFileLength() == 1, "eta file length should increase");
     expect(factor.factorize(I), "refactorize should succeed");
     expect(factor.etaFileLength() == 0, "eta file length should reset after factorize");
@@ -397,7 +397,7 @@ void testEtaFileSparseStorageAndApply() {
     eta_vec.set(3, 2.0);
     eta_vec.set(99, -1.5);
     eta_vec.set(150, 0.5);
-    file.append(150, eta_vec);
+    expect(file.append(150, eta_vec), "sparse eta update should be accepted");
     expect(file.length() == 1, "eta file length");
     expect(file.updates().size() == 1, "one eta update");
     expect(file.updates().front().indices.size() == 3, "store sparse eta nnz only");
@@ -419,6 +419,16 @@ void testEtaFileSparseStorageAndApply() {
     expect(std::abs(v[99] - v_ref[99]) < 1e-12, "sparse forward fill");
 }
 
+void testEtaFileRejectsNearSingularPivot() {
+    lp_solver::linalg::EtaFile file;
+    lp_solver::util::IndexedVector eta_vec(3);
+    eta_vec.set(0, 1.0);
+    eta_vec.set(1, 1e-15);
+
+    expect(!file.append(1, eta_vec), "near-singular eta update should be rejected");
+    expect(file.length() == 0, "rejected eta update should not be appended");
+}
+
 void testEigenFactorEtaUpdateMath() {
     lp_solver::util::PackedMatrix::Builder b(3, 3);
     b.appendColumn(std::vector<int>{0}, std::vector<double>{1.0});
@@ -433,13 +443,13 @@ void testEigenFactorEtaUpdateMath() {
     eta_col0.set(0, 2.0);
     eta_col0.set(1, 0.5);
     eta_col0.set(2, -1.0);
-    factor.updateEta(0, eta_col0);
+    expect(factor.updateEta(0, eta_col0), "first eta update should be accepted");
 
     lp_solver::util::IndexedVector eta_col2(3);
     eta_col2.set(0, 0.25);
     eta_col2.set(1, -0.5);
     eta_col2.set(2, 1.5);
-    factor.updateEta(2, eta_col2);
+    expect(factor.updateEta(2, eta_col2), "second eta update should be accepted");
     expect(factor.etaFileLength() == 2, "eta length should reflect two updates");
 
     // M^{-1} = E2^{-1} * E1^{-1} for ftran path.
@@ -482,12 +492,12 @@ void testGoldfarbReidDseHypersparseMatchesDense() {
     lp_solver::util::IndexedVector eta0(m);
     eta0.set(0, 2.0);
     eta0.set(2, -0.5);
-    factor.updateEta(0, eta0);
+    expect(factor.updateEta(0, eta0), "first DSE eta update should be accepted");
 
     lp_solver::util::IndexedVector eta2(m);
     eta2.set(2, 1.25);
     eta2.set(4, 0.75);
-    factor.updateEta(2, eta2);
+    expect(factor.updateEta(2, eta2), "second DSE eta update should be accepted");
 
     const int leaving_row = 2;
     lp_solver::util::IndexedVector rho(m);
@@ -613,6 +623,7 @@ int main() {
         testSparseFactorBackendsAgreeOnSolve();
         testEigenFactorRandomResiduals();
         testEtaFileSparseStorageAndApply();
+        testEtaFileRejectsNearSingularPivot();
         testEigenFactorEtaUpdateMath();
         testGoldfarbReidDseHypersparseMatchesDense();
         testDseSolveOnSparseModel();

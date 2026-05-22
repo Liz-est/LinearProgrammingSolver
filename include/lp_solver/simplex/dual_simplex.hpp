@@ -30,7 +30,7 @@ struct SolverConfig {
 
 class DualSimplex {
 public:
-    enum class Status { Optimal, Infeasible, Unbounded, IterationLimit };
+    enum class Status { Optimal, Infeasible, Unbounded, IterationLimit, Singular };
 
     DualSimplex(
         std::unique_ptr<linalg::IBasisFactor> factor,
@@ -72,7 +72,7 @@ private:
     void computePrimalBasic(const model::ProblemData& prob, model::SolverState& state) const;
     void computeDualAndReducedCosts(const model::ProblemData& prob, model::SolverState& state) const;
     [[nodiscard]] double computeObjective(const model::ProblemData& prob, const model::SolverState& state) const;
-    void pivot(
+    bool pivot(
         int leaving_row,
         int entering_col,
         const util::IndexedVector& ftran_col,

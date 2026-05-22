@@ -135,6 +135,8 @@ const char* statusToString(lp_solver::simplex::DualSimplex::Status st) {
         return "unbounded";
     case Status::IterationLimit:
         return "iteration_limit";
+    case Status::Singular:
+        return "singular";
     default:
         return "unknown";
     }

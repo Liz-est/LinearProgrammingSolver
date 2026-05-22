@@ -17,7 +17,7 @@ public:
     [[nodiscard]] bool factorize(const ::lp_solver::util::PackedMatrix& basis_matrix) override;
     void ftran(::lp_solver::util::IndexedVector& rhs) const override;
     void btran(::lp_solver::util::IndexedVector& rhs) const override;
-    void updateEta(int pivot_row, const ::lp_solver::util::IndexedVector& ftran_col) override;
+    [[nodiscard]] bool updateEta(int pivot_row, const ::lp_solver::util::IndexedVector& ftran_col) override;
     [[nodiscard]] int etaFileLength() const override;
 
 private:

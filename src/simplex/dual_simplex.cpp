@@ -423,8 +423,20 @@ DualSimplex::Status DualSimplex::solve(
                     observer_->onPivot(leave, entering_col, std::abs(state.reduced_costs.empty() ? 0.0 : state.reduced_costs.front()));
                 }
 
-                pivot(leave, entering_col, aq, work_prob, state);
-                updateDuals(work_prob, leave, entering_col, rho, aq, state);
+                const bool eta_updated = pivot(leave, entering_col, aq, work_prob, state);
+                if (!eta_updated) {
+                    if (!factor_->factorize(buildBasisMatrix(work_prob, state))) {
+                        if (observer_ != nullptr) {
+                            observer_->onTermination(state, "Singular basis after rejected eta update");
+                        }
+                        return Status::Singular;
+                    }
+                    initializeDseWeights(state);
+                    computePrimalBasic(work_prob, state);
+                    computeDualAndReducedCosts(work_prob, state);
+                } else {
+                    updateDuals(work_prob, leave, entering_col, rho, aq, state);
+                }
                 primal_progress = true;
 
                 if (cfg.refactor_frequency > 0 && factor_->etaFileLength() >= cfg.refactor_frequency) {
@@ -538,8 +550,20 @@ DualSimplex::Status DualSimplex::solve(
             observer_->onPivot(leaving_row, entering_col, ratio);
         }
 
-        pivot(leaving_row, entering_col, aq, work_prob, state);
-        updateDuals(work_prob, leaving_row, entering_col, rho, aq, state);
+        const bool eta_updated = pivot(leaving_row, entering_col, aq, work_prob, state);
+        if (!eta_updated) {
+            if (!factor_->factorize(buildBasisMatrix(work_prob, state))) {
+                if (observer_ != nullptr) {
+                    observer_->onTermination(state, "Singular basis after rejected eta update");
+                }
+                return Status::Singular;
+            }
+            initializeDseWeights(state);
+            computePrimalBasic(work_prob, state);
+            computeDualAndReducedCosts(work_prob, state);
+        } else {
+            updateDuals(work_prob, leaving_row, entering_col, rho, aq, state);
+        }
 
         if (cfg.refactor_frequency > 0 && factor_->etaFileLength() >= cfg.refactor_frequency) {
             if (!factor_->factorize(buildBasisMatrix(work_prob, state))) {
@@ -855,7 +879,7 @@ double DualSimplex::computeObjective(const model::ProblemData& prob, const model
     return obj;
 }
 
-void DualSimplex::pivot(
+bool DualSimplex::pivot(
     int leaving_row,
     int entering_col,
     const util::IndexedVector& ftran_col,
@@ -864,7 +888,7 @@ void DualSimplex::pivot(
 ) {
     (void)prob;
     if (leaving_row < 0 || leaving_row >= static_cast<int>(state.basic_indices.size())) {
-        return;
+        return false;
     }
 
     const int leaving_col = state.basic_indices[leaving_row];
@@ -885,7 +909,7 @@ void DualSimplex::pivot(
         state.x_basic[leaving_row] = theta;
     }
 
-    factor_->updateEta(leaving_row, ftran_col);
+    return factor_->updateEta(leaving_row, ftran_col);
 }
 
 void DualSimplex::updateDuals(

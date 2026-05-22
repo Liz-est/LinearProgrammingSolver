@@ -19,9 +19,10 @@ public:
     void clear();
 
     /// Append $E = I + (d - e_p) e_p^T$ using non-zeros from `ftran_col`.
-    void append(int pivot_row, const util::IndexedVector& ftran_col);
+    /// Returns false when the pivot entry is too small to form a reliable eta update.
+    [[nodiscard]] bool append(int pivot_row, const util::IndexedVector& ftran_col);
 
-    /// Apply $E_1^{-1} \cdots E_k^{-1}$ to `v` (forward sweep, ftran path).
+    /// Apply $E_k^{-1} \cdots E_1^{-1}$ to `v` (forward sweep, ftran path).
     void applyForward(util::IndexedVector& v) const;
 
     /// Apply $E_k^{-T} \cdots E_1^{-T}$ to `v` (backward sweep, btran path).

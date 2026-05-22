@@ -15,9 +15,10 @@ public:
     virtual void ftran(util::IndexedVector& rhs) const = 0;
     virtual void btran(util::IndexedVector& rhs) const = 0;
 
-    virtual void updateEta(int pivot_row, const util::IndexedVector& ftran_col) {
+    [[nodiscard]] virtual bool updateEta(int pivot_row, const util::IndexedVector& ftran_col) {
         (void)pivot_row;
         (void)ftran_col;
+        return false;
     }
 
     [[nodiscard]] virtual int etaFileLength() const { return 0; }
